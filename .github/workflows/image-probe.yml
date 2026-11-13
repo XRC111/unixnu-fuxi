@@ -1,0 +1,11 @@
+name: image-probe
+on: workflow_dispatch
+jobs:
+  image:
+    runs-on: macos-26
+    timeout-minutes: 240
+    steps:
+      - run: |
+          sw_vers
+          xcodebuild -version
+          df -h /
