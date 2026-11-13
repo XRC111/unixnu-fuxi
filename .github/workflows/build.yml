@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-main-v2-${{ github.run_id }}
   cancel-in-progress: true
 
 defaults:
@@ -298,3 +298,4 @@ jobs:
       - name: Remove proprietary inputs
         if: always()
         run: rm -rf unixnu/out/ipsw unixnu/out/feeds fuxi/.cache/firmware "$RUNNER_TEMP/image" unixnu/out/*/*/*/payload
+
