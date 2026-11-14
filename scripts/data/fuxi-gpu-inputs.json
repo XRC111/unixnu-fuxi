@@ -1,12 +1,31 @@
 {
-  "comment": "Xiaomi 13 (fuxi) GPU firmware the kernel embeds in place of the reference board's. Only the ZAP shader is board data: it is signed by the phone maker and authenticated by TrustZone (PAS), so only this phone's own image runs, and the reference board's copy cannot be borrowed. GMU and SQE images stay the shared SM8550 ones. Fill bytes and sha256 from scripts/pull-fuxi-gpu-firmware.sh; the file itself stays under .cache/firmware/fuxi-gpu and never enters the repository. While sha256 is null the kernel carries an empty ZAP image and the GPU stops at its ZAP step, which is the correct failure to see before the rest of the GPU path exists.",
-  "firmware": {
-    "files": {
-      "qcom/sm8550/fuxi/a740_zap.mbn": {
-        "bytes": 12088,
-        "sha256": "d7b9ec4391ed6d5e0fbefbedfc66ede92e9c5b2b85bb8c27ee8bf6fda115efcf",
-        "source": "MIUI/HyperOS 4.0.0.12.XMCCNXM vendor /firmware/a740_zap.mdt + .b00-.b02, read with adb pull on 2026-11-14 (world readable, no root) and joined by scripts/squash-mdt.py; 12088 bytes, the same size the OnePlus Ace 3 port pins for its own A740 ZAP, so the shader is the shared one and only the signature differs"
-      }
-    }
+ "comment": "Xiaomi 13 (fuxi) GPU firmware the kernel embeds in place of the reference board's. A740 is the shared SM8550 GPU, so the SQE microcode and the GMU image should be the ones this phone actually runs; only the ZAP shader is device-locked, because TrustZone (PAS) authenticates its vendor signature. Fill bytes and sha256 from scripts/pull-fuxi-gpu-firmware.sh; no file here enters the repository. While a sha256 is null the kernel carries an empty image and the GPU stops at that step, which is the correct failure to see before the rest of the GPU path exists.",
+ "firmware": {
+  "files": {
+   "qcom/sm8550/fuxi/a740_zap.mbn": {
+    "bytes": 12088,
+    "sha256": "d7b9ec4391ed6d5e0fbefbedfc66ede92e9c5b2b85bb8c27ee8bf6fda115efcf",
+    "source": "HyperOS 4.0.0.12.XMCCNXM vendor /firmware/a740_zap.mdt + .b00-.b02, pulled with adb on 2026-11-14 (world readable; root was available but not needed) and joined by scripts/squash-mdt.py into a 12088-byte 32-bit ELF with three segments at offsets 0/4096/8192",
+    "note": "the same size the OnePlus Ace 3 port pins for its own A740 ZAP, so the shader is shared and only the signature differs"
+   },
+   "qcom/sm8550/fuxi/a740_sqe.fw": {
+    "bytes": 76724,
+    "sha256": "96fee336424b139100fc60b5b45a907360e4b3936d7e1d00406b9bd80ca48473",
+    "source": "vendor /firmware/a740_sqe.fw, pulled 2026-11-14"
+   },
+   "qcom/sm8550/fuxi/gmu_gen70200.bin": {
+    "bytes": 66844,
+    "sha256": "1a2a419c39046d3141fc5fed5aa7f971de2db40cc7a1d89693c3e26fad64dd98",
+    "source": "vendor /firmware/gmu_gen70200.bin, pulled 2026-11-14; the file is named after the GMU generation, not after the GPU, so a search for a740_gmu.bin finds nothing on this device"
+   }
   }
+ },
+ "runtime_reference": {
+  "stock_cmdline_panel": "msm_drm.dsi_display0=qcom,mdss_dsi_m3_38_0c_0a_dsc_cmd: (stock kernel command line, 2026-11-14)",
+  "stock_identity": "ro.serialno a3130473; persist /dev/block/sda18 (64 MiB), devinfo /dev/block/sda15 (16 MiB); ro.boot.chip_id is empty on this build",
+  "stock_input": "fts at event7 (FocalTech touch), gpio-keys event0, pmic_pwrkey event1, goodix uinput event2",
+  "wifi": "Qualcomm kiwi / kiwi_v2 (WCN7850 class): /vendor/firmware/wlan/qca_cld/kiwi{, _v2} hold WCNSS_qcom_cfg.ini and a wlan_mac.bin link into /mnt/vendor/persist",
+  "framebuffer": "there is no /sys/class/graphics/fb0 on this build: the stock kernel drives the panel through msm_drm, so no fbdev mode string exists to match",
+  "dtbo": "dtbo_a is a Qualcomm DTBO table (DT_TABLE_MAGIC 0xd7b7ab1e) on /dev/block/sde18, 25165824 bytes with 57 overlay DTBs; the overlays the bootloader applied are already merged into the live tree that facts/gpu_memory_facts.json summarises, and the resolved panel is qcom,mdss_dsi_m3_38_0c_0a_dsc_cmd"
+ }
 }
