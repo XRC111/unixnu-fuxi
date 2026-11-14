@@ -15,8 +15,9 @@ kit = "fuxi"
 [components]
 # The template set, plus the GENI SPI engine and the FTM5 protocol of the touch controller, and the
 # SM8550 UFS transport (ShengUfs; its probe levels are default-off, so it touches nothing until the
-# native-ufs-probe boot argument asks). ShengUfs's catalog dependencies (VirtioMmioBlock, VerifiedRoot)
-# resolve automatically; VirtioMmioBlock is only used by the full root path, not by the probes.
+# native-ufs-probe boot argument asks). The catalog lists VirtioMmioBlock and VerifiedRoot as its
+# dependencies; this board builds neither: the probes never read a block, and the verified policy needs a
+# real signed volume that a CI build does not carry.
 include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot", "QcomGeniSpi", "FuxiFtsTouch", "ShengUfs"]
 
 [kernel]
@@ -29,7 +30,8 @@ patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches
 # ApplePMGRNub service), ShengHidInput's touch digitizer (force-loaded by fuxi_defconfig; the touch probe starts it), the RAM
 # block (CONFIG_XNU_NATIVE_RAM_BLOCK: a RAM disk from the loader as a block device), the touch archive that bsd_init
 # calls into (patches/xnu/fuxi-touch-probe.patch), and the UFS transport (CONFIG_XNU_NATIVE_UFS: ShengUfs's NativeUfs,
-# built by its own component recipe). The order follows UniXNU-sheng.
+# built by scripts/build-sheng-ufs.py without the authenticated policy handoff, whose policy data is a real signed
+# volume policy). The order follows UniXNU-sheng.
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
@@ -42,7 +44,7 @@ archives = [
   "build-fuxi-platform-power.py",
   "build-fuxi-hid-input.py",
   "build-fuxi-ram-block.py",
-  "component:ShengUfs",
+  "build-sheng-ufs.py",
   "build-fuxi-touch.py",
 ]
 
