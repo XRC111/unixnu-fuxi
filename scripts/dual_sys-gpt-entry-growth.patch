@@ -1,0 +1,42 @@
+diff --git a/scripts/dual_sys/gpt.py b/scripts/dual_sys/gpt.py
+index aaf876f..f6a6a86 100644
+--- a/scripts/dual_sys/gpt.py
++++ b/scripts/dual_sys/gpt.py
+@@ -92,13 +92,26 @@ class GPT:
+         require(user['end'] == max(e['end'] for e in self.entries), 'userdata must be the last occupied partition')
+         used = {e['index'] for e in self.entries}
+         empty = next((i for i in range(1, self.h['count'] + 1) if i not in used), None)
+-        require(empty is not None, 'no free GPT entry')
++        count = self.h['count']
++        if empty is None:
++            # Some boards (fuxi) ship a full 32-entry table while the disk already
++            # reserves 16 KiB for it. Grow the declared entry count inside that same
++            # reserved space: the usable range and both reserved sector counts stay
++            # exactly as they are, so only the count field, the zero-padded table and
++            # the two entry CRCs change.
++            room = min((self.h['first'] - 2) * self.sector // 128,
++                       (self.total - 2 - self.h['last']) * self.sector // 128)
++            require(room > self.h['count'],
++                    'no free GPT entry and no reserved room to grow the entry table')
++            count = room
++            empty = self.h['count'] + 1
+         align = MIB // self.sector
+         end = (user['end'] + 1) // align * align - 1
+         start = end + 1 - requested // self.sector
+         require(start > user['start'] and (start - user['start']) * self.sector >= MIB,
+                 'requested size leaves no usable userdata')
+-        table = bytearray(self.table)
++        table = bytearray(count * 128)
++        table[:len(self.table)] = self.table
+         struct.pack_into('<Q', table, (userdata_index - 1) * 128 + 40, start - 1)
+         entry = bytearray(128)
+         entry[:16], entry[16:32] = LINUX_DATA, uuid.uuid4().bytes_le
+@@ -109,6 +122,7 @@ class GPT:
+         primary[2 * self.sector:2 * self.sector + len(table)] = table
+         backup[:len(table)] = table
+         for region, offset in ((primary, self.sector), (backup, len(backup) - self.sector)):
++            struct.pack_into('<I', region, offset + 80, count)
+             struct.pack_into('<I', region, offset + 88, zlib.crc32(table))
+             struct.pack_into('<I', region, offset + 16, 0)
+             struct.pack_into('<I', region, offset + 16, zlib.crc32(region[offset:offset + 92]))
+
