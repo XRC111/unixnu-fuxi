@@ -39,6 +39,24 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# This script lives in the device repository but works on the UniXNU build tree: kits/VerifiedRoot,
+# scripts/build-verified-root-probe.py, build/ and .cache/ all belong to that tree, which the driver
+# assembles at out/<device>/<profile>/<config>/tree. When the driver copies the script into that tree
+# (the normal path, through board.toml [kernel] archives) ROOT already is the tree; when CI runs it
+# straight from the device repository it is not, so take the tree from --tree or $UNIXNU_TREE.
+TREE = None
+
+
+def tree_root() -> Path:
+    return TREE if TREE is not None else ROOT
+
+
+def require_tree() -> Path:
+    root = tree_root()
+    if not (root / 'kits/VerifiedRoot/tools/manifest.py').is_file():
+        fail(f'{root} has no kits/VerifiedRoot; pass --tree <unixnu build tree> or export UNIXNU_TREE '
+             '(the driver assembles it under out/<device>/<profile>/<config>/tree)')
+    return root
 # The signed envelope: kits/VerifiedRoot/tools/manifest.py writes a 160-byte header followed by a
 # 384-byte RSA-3072 PKCS#1 v1.5 SHA-256 signature.
 ENVELOPE_BYTES = 160 + 384
@@ -94,7 +112,7 @@ def detach(device: str) -> None:
 
 
 def sign_window(name: str, spec: dict, ipsw: Path, keys: Path, private: Path, public: Path) -> Path:
-    output = ROOT / 'build' / ('verified-root-' + name)
+    output = tree_root() / 'build' / ('verified-root-' + name)
     metadata = output / 'manifest.json'
     if metadata.is_file():
         record = json.loads(metadata.read_text())
@@ -109,7 +127,7 @@ def sign_window(name: str, spec: dict, ipsw: Path, keys: Path, private: Path, pu
         fail(f'{dmg} is missing; run ./unixnu ipsw fetch OS "Cryptex1,SystemOS" first')
 
     spec_from_file = importlib.util.spec_from_file_location('verified_manifest',
-                                                           ROOT / 'kits/VerifiedRoot/tools/manifest.py')
+                                                           require_tree() / 'kits/VerifiedRoot/tools/manifest.py')
     module = importlib.util.module_from_spec(spec_from_file)
     spec_from_file.loader.exec_module(module)
 
@@ -189,32 +207,48 @@ def main() -> int:
                         default=Path(os.environ['UNIXNU_IPSW_DIR']) if os.environ.get('UNIXNU_IPSW_DIR') else None,
                         help='directory holding 044-76040-038.dmg and 044-76034-038.dmg '
                              '(default: $UNIXNU_IPSW_DIR, exported by ci/build.yml from ./unixnu ipsw fetch)')
+    parser.add_argument('--tree', type=Path,
+                        default=Path(os.environ['UNIXNU_TREE']) if os.environ.get('UNIXNU_TREE') else None,
+                        help='UniXNU build tree (default: $UNIXNU_TREE); the driver assembles it under '
+                             'out/<device>/<profile>/<config>/tree')
     parser.add_argument('--no-archive', action='store_true',
                         help='write only the header-only envelopes and .vroot objects, skipping the kernel '
                              'archive (that step needs bsd_init.o.json, which only "build kernel" writes, '
                              'so an image-only run cannot do it)')
     parser.add_argument('sources', nargs='*', help='ignored; board.toml entries stay uniform')
     args = parser.parse_args()
+    global TREE
+    TREE = args.tree.resolve() if args.tree else None
     if not args.ipsw_dir:
         fail('pass --ipsw-dir or export UNIXNU_IPSW_DIR')
 
-    keys = ROOT / 'build/verified-root-fuxi/keys'
+    keys = tree_root() / 'build/verified-root-fuxi/keys'
     private, public = ensure_keys(keys)
 
     for name, spec in WINDOWS.items():
         sign_window(name, spec, args.ipsw_dir, keys, private, public)
 
-    report = dict(shape='header-only', envelope_bytes=ENVELOPE_BYTES,
+    root = tree_root()
+
+    def shown(path: Path) -> str:
+        # The tree is not always under ROOT (CI passes the assembled tree, the driver passes its own),
+        # so fall back to the absolute path instead of failing in relative_to.
+        try:
+            return str(path.relative_to(root))
+        except ValueError:
+            return str(path)
+
+    report = dict(shape='header-only', envelope_bytes=ENVELOPE_BYTES, tree=str(root),
                   windows=[dict(window=spec['window'], directory=name,
-                                envelope=str((ROOT / 'build' / f'verified-root-{name}' / 'manifest.bin').relative_to(ROOT)),
-                                vroot=str((ROOT / 'build' / f'verified-root-{name}' / f'{spec["window"]}.vroot').relative_to(ROOT)),
-                                block_count=(ROOT / 'build' / f'verified-root-{name}' / 'hashes.bin').stat().st_size // 32)
+                                envelope=shown(root / 'build' / f'verified-root-{name}' / 'manifest.bin'),
+                                vroot=shown(root / 'build' / f'verified-root-{name}' / f'{spec["window"]}.vroot'),
+                                block_count=(root / 'build' / f'verified-root-{name}' / 'hashes.bin').stat().st_size // 32)
                            for name, spec in WINDOWS.items()])
     report['total_table_bytes'] = sum(entry['block_count'] * 32 for entry in report['windows'])
-    (ROOT / 'build/verified-root-header-only.json').write_text(json.dumps(report, indent=2) + '\n')
-    print(f'header-only: {report["total_table_bytes"]} table bytes kept out of the kernel')
+    (tree_root() / 'build/verified-root-header-only.json').write_text(json.dumps(report, indent=2) + '\n')
+    print(f'header-only: {report["total_table_bytes"]} table bytes kept out of the kernel in {root}')
     for entry in report['windows']:
-        print(f'  --object {entry["window"]}.vroot={entry["vroot"]}')
+        print(f'  --object {entry["window"]}.vroot={entry["vroot"]} ({entry["block_count"]} blocks)')
 
     if args.no_archive:
         print('build-fuxi-root-policy: envelopes and .vroot objects only (--no-archive)')
@@ -222,7 +256,7 @@ def main() -> int:
 
     # build-verified-root-probe.py reads the SystemOS image from .cache/firmware,
     # so point that at the fetched copy instead of duplicating 3 GB.
-    cache = ROOT / '.cache/firmware/target-volumes'
+    cache = tree_root() / '.cache/firmware/target-volumes'
     cache.mkdir(parents=True, exist_ok=True)
     for spec in WINDOWS.values():
         source, target = args.ipsw_dir / spec['dmg'], cache / spec['dmg']
@@ -232,19 +266,19 @@ def main() -> int:
     # build-verified-root-probe.py compiles with bsd_init's recorded flags, which carry
     # -I build/xnu/ios-obj/EXPORT_HDRS/libsa; XNU only creates that directory for some targets, and
     # clang treats a missing -I as an error under -Werror.
-    (ROOT / 'build/xnu/ios-obj/EXPORT_HDRS/libsa').mkdir(parents=True, exist_ok=True)
+    (tree_root() / 'build/xnu/ios-obj/EXPORT_HDRS/libsa').mkdir(parents=True, exist_ok=True)
 
-    recipe = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/bsd_init.o.json'
+    recipe = tree_root() / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/bsd_init.o.json'
     if not recipe.is_file():
         fail(f'{recipe} is missing; the kernel archive needs a completed "unixnu build kernel", '
              'or run with --no-archive for the image-only outputs')
 
-    result = subprocess.run([sys.executable, str(ROOT / 'scripts/build-verified-root-probe.py'),
+    result = subprocess.run([sys.executable, str(tree_root() / 'scripts/build-verified-root-probe.py'),
                              '--component', 'os', '--include-systemos'], cwd=ROOT)
     if result.returncode:
         fail('build-verified-root-probe.py failed')
 
-    archive = ROOT / 'build/verified-root-os-xnu-bundle/libVerifiedRootProbe.a'
+    archive = tree_root() / 'build/verified-root-os-xnu-bundle/libVerifiedRootProbe.a'
     if not archive.is_file():
         fail(f'{archive} was not produced')
     print(f'build-fuxi-root-policy: {archive.relative_to(ROOT)} is ready for the kernel link')
@@ -253,6 +287,9 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+
+
 
 
 

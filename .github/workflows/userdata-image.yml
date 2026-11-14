@@ -95,10 +95,18 @@ jobs:
       - name: Sign the windows and stage their hash tables
         working-directory: unixnu
         run: |
-          # The kernel link wants the 544-byte header-only envelope; the image wants the matching
-          # <window>.vroot objects. One run of the signing script produces both, and this step is what
-          # keeps the two halves of the policy consistent.
-          python3 "$GITHUB_WORKSPACE/fuxi/scripts/build-fuxi-root-policy.py" --no-archive
+          # The signing script works on the UniXNU build tree, not on the device repository it lives in:
+          # kits/VerifiedRoot/tools/manifest.py is a catalog component the driver places in the tree.
+          # "unixnu tree" assembles it without a kernel build, which is all the signing needs.
+          ./unixnu tree --device "$GITHUB_WORKSPACE/fuxi"
+          tree=$(ls -d out/*/*/*/tree | head -n 1)
+          [ -n "$tree" ] || { echo "::error::no build tree under unixnu/out"; exit 1; }
+          echo "tree: $tree"
+          ls "$tree/kits" 2>/dev/null || true
+          [ -f "$tree/kits/VerifiedRoot/tools/manifest.py" ] || {
+            echo "::error::kits/VerifiedRoot did not land in $tree"; exit 1; }
+          python3 "$GITHUB_WORKSPACE/fuxi/scripts/build-fuxi-root-policy.py" \
+            --tree "$PWD/$tree" --no-archive
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -117,9 +125,12 @@ jobs:
           # OS.vroot and SystemOS.vroot carry the per-block SHA-256 tables of the two windows; the
           # kernel's header-only policy loads them from here instead of carrying them in the boot
           # image, which is what keeps boot.img under the 192 MiB partition the ABL enforces.
+          tree=$(ls -d out/*/*/*/tree | head -n 1)
+          [ -n "$tree" ] || { echo "::error::no build tree under unixnu/out"; exit 1; }
+          ls -l "$tree/build/verified-root-os/OS.vroot" "$tree/build/verified-root-systemos/SystemOS.vroot"
           ./unixnu build userdata --device "$GITHUB_WORKSPACE/fuxi" \
-            --object "OS.vroot=build/verified-root-os/OS.vroot" \
-            --object "SystemOS.vroot=build/verified-root-systemos/SystemOS.vroot"
+            --object "OS.vroot=$PWD/$tree/build/verified-root-os/OS.vroot" \
+            --object "SystemOS.vroot=$PWD/$tree/build/verified-root-systemos/SystemOS.vroot"
       - name: Report and encrypt
         if: inputs.dry_run != '1'
         run: |
