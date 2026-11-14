@@ -15,13 +15,19 @@
 // display the console code chose, while this record is written by the driver that programmed the panel
 // and is stamped with a magic only after base, width, height and pitch are all in place.
 //
+// Both regions are mapped through IODeviceMemory before they are read. A physical address is not
+// reachable from the kernel by dereferencing it: the first version of this probe did that and the boot
+// died with a level-1 translation fault, far = 0xbaafffc0, esr = 0x96000005. The touch probe maps its
+// controller the same way (package/FuxiTouchProbe.cpp, mapRegion).
+//
 // This stage is read-only. The full XNU display contract (NativeLegacyDisplay binding to the original
 // MobileFramebuffer) needs the prelinked candidates of the target OS build, which this port does not
-// have yet, so the probe establishes the facts that step will rest on: where the frame buffer is, how
-// big it is, and what the panel geometry really is.
+// have yet, so the probe establishes the facts that step will rest on.
 
 #include <pexpert/pexpert.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IODeviceMemory.h>
 
 namespace {
 
@@ -29,7 +35,7 @@ namespace {
 constexpr uint32_t kHandoffMagic = 0x4F474246;   // "FBGO"
 constexpr uint32_t kHandoffOffset = 0x40;
 
-// The record as the firmware writes it. Packed and little-endian, which is how AArch64 lays it out.
+// The record as the firmware writes it, little-endian like the rest of the AArch64 ABI.
 struct FrameBufferHandoff {
   uint32_t magic;
   uint32_t width;
@@ -45,6 +51,7 @@ constexpr uint32_t kPanelHeight = 2400;
 // MDP and DSI windows, from the device tree reg properties (facts/display_engine_facts.json). The sde
 // block sits at qcom,sde-off inside the first window.
 constexpr uint64_t kMdpBase = 0xae00000ULL;
+constexpr uint64_t kMdpSize = 0x84000ULL;
 constexpr uint64_t kSdeOff = 0x1000ULL;
 constexpr uint32_t kCtl0 = 0x16000;
 constexpr uint32_t kIntf1 = 0x36000;   // qcom,sde-intf-off for the DSI interface
@@ -53,7 +60,6 @@ constexpr uint32_t kVig0 = 0x5000;
 // Fetch registers of a VIG pipe, as the reference probe reads them (DisplayTimingProbe.cpp, dpu=2).
 constexpr uint32_t kCtlLayer0 = 0x0000;
 constexpr uint32_t kVigSrc0 = 0x0000;
-constexpr uint32_t kVigSrc0Xy = 0x0008;
 constexpr uint32_t kVigSrc0Size = 0x000c;
 
 // Reported through the boot log; also readable from a debugger, which is why they are file-scope.
@@ -69,6 +75,24 @@ volatile uint32_t gIntf1Timing;
 volatile uint32_t gVig0Src0;
 volatile uint32_t gVig0Size;
 
+struct Region {
+  OSSharedPtr<IOMemoryMap> keep;
+  uintptr_t va = 0;
+};
+
+// A physical range has to be mapped before it can be read; dereferencing the physical address faults.
+bool mapRegion(uint64_t phys, uint64_t length, Region &region)
+{
+  IODeviceMemory *memory = IODeviceMemory::withRange(phys, length);
+  if (!memory) {
+    return false;
+  }
+  region.keep = OSSharedPtr<IOMemoryMap>(memory->map(kIOMapAnywhere | kIOMapInhibitCache), OSNoRetain);
+  memory->release();
+  region.va = region.keep ? static_cast<uintptr_t>(region.keep->getVirtualAddress()) : 0;
+  return region.va != 0;
+}
+
 // The handoff record sits at the end of "Display Reserved", whose address the firmware memory map
 // carries. Boot arguments name it so the probe does not have to walk the map: fuxi-display-base and
 // fuxi-display-size give the region, the same way the touch probe takes its controller window.
@@ -83,9 +107,23 @@ bool readHandoff(FrameBufferHandoff *handoff)
   if (base == 0 || size < kHandoffOffset) {
     return false;
   }
+
+  // Only the last page is needed: the record is the final 0x40 bytes of the region.
+  const uint64_t recordPhys = base + size - kHandoffOffset;
+  const uint64_t pagePhys = recordPhys & ~0xfffULL;
+  const uint64_t offsetInPage = recordPhys - pagePhys;
+
+  Region region;
+  if (!mapRegion(pagePhys, 0x1000, region)) {
+    IOLog("FuxiDisplay: cannot map the handoff page at 0x%llx\n",
+          static_cast<unsigned long long>(pagePhys));
+    return false;
+  }
+
   const volatile FrameBufferHandoff *record =
-      reinterpret_cast<const volatile FrameBufferHandoff *>(base + size - kHandoffOffset);
+      reinterpret_cast<const volatile FrameBufferHandoff *>(region.va + offsetInPage);
   if (record->magic != kHandoffMagic) {
+    IOLog("FuxiDisplay: handoff page mapped, magic is %08x not FBGO\n", record->magic);
     return false;
   }
   handoff->magic = record->magic;
@@ -99,7 +137,7 @@ bool readHandoff(FrameBufferHandoff *handoff)
 } // namespace
 
 // Read what the firmware left scanning out, then the pipe state behind it. Every register read is a
-// plain load from the firmware's own mapping; none of these has a read side effect.
+// plain load from a mapping this function creates; none of these has a read side effect.
 extern "C" void fuxi_display_probe(void)
 {
   unsigned mode = 0;
@@ -128,8 +166,6 @@ extern "C" void fuxi_display_probe(void)
       IOLog("FuxiDisplay: pitch %u is not 4 bytes per pixel for %u columns\n",
             handoff.pitchBytes, kPanelWidth);
     }
-  } else {
-    IOLog("FuxiDisplay: no FB_HANDOFF record (pass fuxi-display-base and fuxi-display-size)\n");
   }
 
   // The console descriptor is a second opinion: when the firmware console and the real scanout agree,
@@ -149,17 +185,22 @@ extern "C" void fuxi_display_probe(void)
   }
 
   if (mode >= 2) {
-    // What the firmware left in the pipe it was scanning out. These addresses are inside the MDP
-    // window the firmware mapped; if that mapping is gone the read faults, which is why this sits
-    // behind mode 2 and is not part of the default bring-up.
-    volatile uint32_t *sde = reinterpret_cast<volatile uint32_t *>(kMdpBase + kSdeOff);
-    gMdpCtl0Layer = sde[(kCtl0 + kCtlLayer0) / 4];
-    gIntf1Timing = sde[kIntf1 / 4];
-    gVig0Src0 = sde[(kVig0 + kVigSrc0) / 4];
-    gVig0Size = sde[(kVig0 + kVigSrc0Size) / 4];
-    IOLog("FuxiDisplay: ctl0 layer0 %08x intf1+0 %08x vig0 src0 %08x size %08x\n",
-          gMdpCtl0Layer, gIntf1Timing, gVig0Src0, gVig0Size);
-    gDisplaySteps = 3;
+    // What the firmware left in the pipe it was scanning out. The MDP window is mapped the same way as
+    // the handoff page; reading it through the physical address would fault.
+    Region mdp;
+    if (!mapRegion(kMdpBase, kMdpSize, mdp)) {
+      IOLog("FuxiDisplay: cannot map the MDP window at 0x%llx\n",
+            static_cast<unsigned long long>(kMdpBase));
+    } else {
+      const uintptr_t sde = mdp.va + kSdeOff;
+      gMdpCtl0Layer = *reinterpret_cast<volatile uint32_t *>(sde + kCtl0 + kCtlLayer0);
+      gIntf1Timing = *reinterpret_cast<volatile uint32_t *>(sde + kIntf1);
+      gVig0Src0 = *reinterpret_cast<volatile uint32_t *>(sde + kVig0 + kVigSrc0);
+      gVig0Size = *reinterpret_cast<volatile uint32_t *>(sde + kVig0 + kVigSrc0Size);
+      IOLog("FuxiDisplay: ctl0 layer0 %08x intf1+0 %08x vig0 src0 %08x size %08x\n",
+            gMdpCtl0Layer, gIntf1Timing, gVig0Src0, gVig0Size);
+      gDisplaySteps = 3;
+    }
   }
 
   IOLog("FuxiDisplay: probe done, steps %u\n", gDisplaySteps);
