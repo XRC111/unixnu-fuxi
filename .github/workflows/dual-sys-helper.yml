@@ -1,0 +1,50 @@
+name: dual-sys helper
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  f2fs-shrink:
+    name: aarch64 static f2fs-shrink
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: OddlyLabs/UniXNU
+          ref: fuxi
+          path: unixnu
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: device
+          persist-credentials: false
+      - name: Install the cross toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu
+          aarch64-linux-gnu-gcc --version | head -n 1
+      - name: Build the helper
+        run: |
+          mkdir -p out/dual_sys
+          aarch64-linux-gnu-gcc -static -O2 -Wall -Wextra -Werror \
+            unixnu/scripts/dual_sys/f2fs-shrink.c -o out/dual_sys/f2fs-shrink
+          file out/dual_sys/f2fs-shrink
+          ls -l out/dual_sys/f2fs-shrink
+          sha256sum out/dual_sys/f2fs-shrink
+      - name: Self test the helper under qemu
+        run: |
+          sudo apt-get install -y -qq qemu-user-static
+          qemu-aarch64-static out/dual_sys/f2fs-shrink self-test
+      - name: Check the host scripts still parse
+        run: |
+          python3 -m py_compile unixnu/scripts/dual_sys/partition.py unixnu/scripts/dual_sys/gpt.py
+          sh -n unixnu/scripts/dual_sys/twrp.sh
+          echo scripts-ok
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f2fs-shrink-aarch64
+          path: out/dual_sys/f2fs-shrink
+          if-no-files-found: error
+          retention-days: 7
