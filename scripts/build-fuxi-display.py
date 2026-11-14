@@ -50,7 +50,10 @@ def main() -> int:
     while index < len(arguments):
         value = arguments[index]
         if value == record['file']:
-            command.append(str(source))
+            # The recipe comes from a .c object and clang picks the language from the extension, so a
+            # .cpp replacement would be compiled as C. -x has to sit before the input file; appended
+            # after it clang answers "-x c++ after last input file has no effect".
+            command.extend(['-x', 'c++', str(source)])
         elif value == '-o':
             command.extend(['-o', str(destination)])
             index += 1
@@ -60,9 +63,7 @@ def main() -> int:
             command.append(value)
         index += 1
 
-    # The recipe comes from a .c object, so clang would compile this file as C; the probe uses a
-    # namespace and constexpr, so the language has to be named explicitly.
-    command += ['-x', 'c++', '-Werror']
+    command.append('-Werror')
 
     result = subprocess.run(command, cwd=record['directory'], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
