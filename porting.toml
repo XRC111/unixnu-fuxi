@@ -10,7 +10,7 @@ summary = "Xiaomi 13 (fuxi). Board files from the UniXNU device template, the FT
 id = "configuration"
 status = "implemented"
 components = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot"]
-paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore", ".gitattributes", "local.toml.example", "LICENSE"]
+paths = ["board.toml", "feeds.toml", "configs/**", "scripts/build-arm-driver.py", ".gitmodules", ".github/**", ".gitignore", ".gitattributes", "local.toml.example", "LICENSE"]
 inputs = ["UniXNU examples/device template (SM8550, iPadOS 17.7.11 profile).", "UniXNU-sm8550-common at 23b2049fcd9e30356161def84231334fb55ecca9."]
 configuration = ["board.toml: name fuxi, kit fuxi, soc_source sm8550, os_profile ipados-17.7.11-21H461, device_tree.source device:dts/fuxi.dts.", "configs/fuxi_defconfig: the template options, CONFIG_XNU_NATIVE_ADRENO off (the SoC fragment turns it on), and CONFIG_XNU_EXTRA_LD_ARCHIVES for the touch archive and the force-loaded HID archive. The arch fragment sets CONFIG_XNU_BUILD_ARCHIVES, CONFIG_XNU_NATIVE_AES, CONFIG_XNU_NATIVE_ARCH_TIMER and CONFIG_XNU_NATIVE_PAN; the OS fragment sets CONFIG_XNU_SOURCE_MOCKFS.", "[kernel] archives in build order: corecrypto (plain and namespaced), ArmDTPlatform, ArmCpu, SoftwareAES and its bindings, libpthread, the mockfs fixture, build-fuxi-platform-power.py, build-fuxi-hid-input.py, build-fuxi-ram-block.py, build-fuxi-touch.py."]
 procedure = ["./unixnu defconfig fuxi_defconfig -D ../unixnu-fuxi", "./unixnu status --json", "./unixnu build kernel"]
@@ -262,3 +262,4 @@ evidence = [
   { kind = "device", command = "fastboot boot of image r3-ramblock (SHA-256 cd5a110268c79ce7): fuxi-touch=4 fuxi-touch-panic=2 rd=md0-ramblock, packed restore ramdisk, restore trust cache, root_match_volume_uuid 9071148B-B025-402D-AD7A-48464D8B5FFF", revision = "11db5c00e84246681b9c9c06582d4eb31fb6ae26", reference = "evidence/2026-11-02-first-boot.md", result = "SYS root apfs /dev/disk1s1 1:launchd 3:restored_externa 4:mount_tmpfs n3: the restore ramdisk's user space runs" },
   { kind = "device", command = "fastboot boot of the run 43220330720 image (SHA-256 f4813a48...) on the second unit (8 GiB, HyperOS 4.0.0.12)", revision = "ed31173e88e730e37e93aa8ec30f59f3602d7e76", reference = "evidence/2026-11-13-first-boot.md", result = "Panic screen photograph transcribed in evidence/2026-11-13-first-boot.md: the full report (four FTS rows, two SMP rows, HID row, SYS row, frames, page counters) drawn below the green and blue bands, over the magenta band" },
 ]
+
