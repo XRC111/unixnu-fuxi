@@ -36,6 +36,7 @@ patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches
 # follows UniXNU-sheng: the policy archive before the driver that references it.
 archives = [
   "build-fuxi-root-auth.py",
+  "build-fuxi-root-check-call.py",
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
   "component:ArmDTPlatform",
@@ -51,6 +52,7 @@ archives = [
   "component:ShengUfs",
   "build-fuxi-touch.py",
   "build-fuxi-display.py",
+  "build-fuxi-root-check.py",
 ]
 
 [device_tree]
@@ -144,7 +146,8 @@ panic_screen = true
 # (bsd_init.c; evidence/2026-11-02-first-boot.md, image r3-ramblock).
 kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "sheng-pmgr=2", "sheng-smp=1", "armcpu-spi-ipi=1",
                "armcpu-self-ipi=1", "native-ufs-root=1", "fuxi-display=1",
-               "fuxi-display-base=0xb8000000", "fuxi-display-size=0x2b00000"]
+               "fuxi-display-base=0xb8000000", "fuxi-display-size=0x2b00000",
+               "fuxi-root-check=1"]
 # The trust cache the payload carries as kernel.macho.trustcache. DarwinBoot's ValidTrustCaches
 # (drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c) reads a container of version 2 modules, and the IPSW's
 # RestoreTrustCache is a version 1 module (uuid cfc8a0d56fb24d6c8b9bd3976ce18057, 267 entries of 22 bytes), so
