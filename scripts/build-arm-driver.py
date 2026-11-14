@@ -100,7 +100,10 @@ if component == 'NativeUfs':
     # block, so NativeUfs is compiled without the handoff. -mgeneral-regs-only stays: it is a kernel
     # ABI requirement, not part of the handoff.
     command += ['-I', str(ROOT / 'kits/VerifiedRoot/include'), '-I', str(ROOT / 'drivers/VirtioMmioBlock'),
-                '-mgeneral-regs-only']
+                '-mgeneral-regs-only',
+                # NativeUfs.cpp mixes IOReturn (int) and uint32_t in the diagnostic ternary; the
+                # handoff build does not compile that path, the plain build does.
+                '-Wno-sign-conversion']
 if component=='NativeOfflineGPU':
     command += ['-I',str(ROOT/'drivers/VirtioMmioConsole')]
 if component in ('NativeLegacyDisplay','NativeHidInput'):
