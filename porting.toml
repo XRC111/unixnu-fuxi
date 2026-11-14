@@ -125,7 +125,9 @@ findings = ["facts/display_engine_facts.json records the SM8550 display engine a
 completion = ["A known frame appears with correct geometry and colors, then userland presentation and backlight controls work."]
 limits = ["No device evidence for display."]
 next_action = ["Read the framebuffer the firmware publishes on fuxi (address, stride, format)."]
-evidence = [
+evidence = [  { kind = "host", command = "read facts/display_engine_facts.json back out of the live tree and compare with the panel facts", revision = "ca7372f16bc70a51ab12194daa2fdb983eafd895", reference = "facts/display_engine_facts.json", result = "MDP windows, block offsets, DSC enc/ctl and the DSI controller and PHY windows extracted; the panel values agree with facts/panel_facts.json" },
+  { kind = "device", command = "adb shell on the stock Android system with the panel live: /sys/class/drm/card0-DSI-1/{modes,status,enabled}, /sys/class/backlight/panel0-backlight, dumpsys display", revision = "ca7372f16bc70a51ab12194daa2fdb983eafd895", reference = "facts/display_engine_facts.json", result = "msm_drm / qcom,sde-kms, connector connected and enabled, modes 1080x2400x{60,120,90}cmd, backlight max 4095 (matches qcom,mdss-dsi-bl-max-level), density 440 dpi, HDR types 1-4 at 420 nits" },
+
   { kind = "source", reference = "fuxi_touch_panel_porting.md", result = "Panel facts with sources (section 3)" },
 ]
 
