@@ -60,8 +60,9 @@ def main() -> int:
             command.append(value)
         index += 1
 
-    # -Werror only: the probe is small and every warning here is worth stopping for.
-    command.append('-Werror')
+    # The recipe comes from a .c object, so clang would compile this file as C; the probe uses a
+    # namespace and constexpr, so the language has to be named explicitly.
+    command += ['-x', 'c++', '-Werror']
 
     result = subprocess.run(command, cwd=record['directory'], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
