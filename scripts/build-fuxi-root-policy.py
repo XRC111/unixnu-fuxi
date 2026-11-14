@@ -39,6 +39,9 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# The signed envelope: kits/VerifiedRoot/tools/manifest.py writes a 160-byte header followed by a
+# 384-byte RSA-3072 PKCS#1 v1.5 SHA-256 signature.
+ENVELOPE_BYTES = 160 + 384
 
 OS_DMG = '044-76040-038.dmg'
 SYSTEMOS_DMG = '044-76034-038.dmg'
@@ -52,10 +55,10 @@ SYSTEMOS_UUID = uuid.UUID('8846FE78-2910-4297-AF97-D59BB6F8FC16')
 # userdata-root.json, so a policy can never describe a different image than the
 # one that was flashed.
 WINDOWS = {
-    'os': dict(dmg=OS_DMG, volume_uuid=OS_UUID,
+    'os': dict(dmg=OS_DMG, window='OS', volume_uuid=OS_UUID,
                image_sha256='e5634d04a8ac35f024845f583394e0a35deb26a04cb0c00286a8674e25a9a4f2',
                image_bytes=6077580800),
-    'systemos': dict(dmg=SYSTEMOS_DMG, volume_uuid=SYSTEMOS_UUID,
+    'systemos': dict(dmg=SYSTEMOS_DMG, window='SystemOS', volume_uuid=SYSTEMOS_UUID,
                      image_sha256='b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f',
                      image_bytes=3303014400),
 }
@@ -144,6 +147,26 @@ def sign_window(name: str, spec: dict, ipsw: Path, keys: Path, private: Path, pu
         detach(device)
     (output / 'original-samples.bin').write_bytes(b''.join(blocks))
 
+    # Header-only shape. manifest.bin keeps just the 544-byte envelope (160-byte header plus the
+    # 384-byte RSA-3072 signature) and the per-block SHA-256 table moves to the root image as the
+    # "<window>.vroot" data object.
+    #
+    # Why: the two windows come to 1,483,785 + 806,400 blocks, so the inline tables are
+    # 73,285,920 bytes of incompressible digests. Carried in the kernel they pushed boot.img to
+    # 203.6 MiB and the fuxi ABL refused it ("Failed to load/authenticate boot image: Load Error":
+    # it will not boot an image larger than the 192 MiB boot_a partition). NativeUfs reads the
+    # header-only form by itself: it sees manifestBytes == VR_HEADER_BYTES + VR_SIGNATURE_BYTES,
+    # takes the block count from header offset 32 and loads the table from the object named after
+    # the manifest's own window name plus ".vroot".
+    envelope = (output / 'manifest.bin').read_bytes()
+    if len(envelope) != ENVELOPE_BYTES + block_count * 32:
+        fail(f'{name}: manifest.bin is {len(envelope)} bytes, expected the envelope plus {block_count} digests')
+    head, table = envelope[:ENVELOPE_BYTES], envelope[ENVELOPE_BYTES:]
+    (output / 'manifest.bin').write_bytes(head)
+    vroot = output / f'{spec["window"]}.vroot'
+    vroot.write_bytes(table)
+    (output / 'hashes.bin').write_bytes(table)
+
     # The shape build-verified-root-probe.py re-reads before it will assemble the archive.
     (output / 'verification.json').write_text(json.dumps(dict(
         image_bytes=spec['image_bytes'], blocks_verified=block_count,
@@ -154,7 +177,8 @@ def sign_window(name: str, spec: dict, ipsw: Path, keys: Path, private: Path, pu
         original_image_modified=False, boot_root_authenticated=False,
         host_only=True, hardware_tested=False), indent=2) + '\n')
     print(f'{name}: signed {block_count} blocks for {spec["image_bytes"]} bytes '
-          f'({record["image_sha256"][:16]}...)')
+          f'({record["image_sha256"][:16]}...); header-only envelope {len(head)} bytes, '
+          f'table {len(table)} bytes -> {vroot.name}')
     return output
 
 
@@ -202,6 +226,7 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
 
 
 

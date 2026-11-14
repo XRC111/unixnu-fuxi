@@ -64,6 +64,42 @@ jobs:
       - name: Select the device
         working-directory: unixnu
         run: ./unixnu defconfig fuxi_defconfig --device "$GITHUB_WORKSPACE/fuxi"
+      - name: Restore the IPSW windows
+        uses: actions/cache/restore@v4
+        with:
+          path: unixnu/out/ipsw
+          key: ipsw-21H461-os-systemos-v1
+      - name: Fetch the OS and SystemOS windows
+        working-directory: unixnu
+        run: |
+          dir=""
+          for candidate in out/ipsw/*; do
+            if [ -d "$candidate" ]; then dir="$candidate"; break; fi
+          done
+          if [ -n "$dir" ] && [ -f "$dir/044-76040-038.dmg" ] && [ -f "$dir/044-76034-038.dmg" ]; then
+            echo "cache hit: $dir"
+          else
+            ./unixnu ipsw fetch OS "Cryptex1,SystemOS" --device "$GITHUB_WORKSPACE/fuxi"
+            for candidate in out/ipsw/*; do
+              if [ -d "$candidate" ]; then dir="$candidate"; break; fi
+            done
+          fi
+          [ -n "$dir" ] || { echo "::error::no IPSW directory"; exit 1; }
+          echo "UNIXNU_IPSW_DIR=$PWD/$dir" >> "$GITHUB_ENV"
+      - name: Sign the windows and stage their hash tables
+        working-directory: unixnu
+        run: |
+          # The kernel link wants the 544-byte header-only envelope; the image wants the matching
+          # <window>.vroot objects. One run of the signing script produces both, and this step is what
+          # keeps the two halves of the policy consistent.
+          python3 "$GITHUB_WORKSPACE/fuxi/scripts/build-fuxi-root-policy.py"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('build/verified-root-header-only.json').read_text())
+          for entry in report['windows']:
+              print(entry['window'], entry['block_count'], entry['object_path'])
+          PY
       - name: Check the windows against the partition (dry run)
         if: inputs.dry_run == '1'
         working-directory: unixnu
@@ -71,7 +107,13 @@ jobs:
       - name: Build the image
         if: inputs.dry_run != '1'
         working-directory: unixnu
-        run: ./unixnu build userdata --device "$GITHUB_WORKSPACE/fuxi"
+        run: |
+          # OS.vroot and SystemOS.vroot carry the per-block SHA-256 tables of the two windows; the
+          # kernel's header-only policy loads them from here instead of carrying them in the boot
+          # image, which is what keeps boot.img under the 192 MiB partition the ABL enforces.
+          ./unixnu build userdata --device "$GITHUB_WORKSPACE/fuxi" \
+            --object "OS.vroot=build/verified-root-os/OS.vroot" \
+            --object "SystemOS.vroot=build/verified-root-systemos/SystemOS.vroot"
       - name: Report and encrypt
         if: inputs.dry_run != '1'
         run: |
