@@ -23,6 +23,10 @@ include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot",
 defconfig = "fuxi_defconfig"
 config_fragments = ["arch:configs/common.config", "soc:configs/sm8550.config", "os:configs/ipados.config"]
 patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+# build-fuxi-root-auth.py edits bsd_init.c so a root volume sealed by the owner policy rather than by
+# Apple Image4 does not panic at boot. It is an archive step rather than a patch because two other
+# board patches already edit that file and a third hunks-based patch would have to be regenerated
+# every time they move the surrounding lines (that failed twice in CI).
 # The archives the merged configuration links, in build order: corecrypto from source (plain and namespaced), the ARM
 # platform and CPU drivers, SoftwareAES with its bindings (the arch fragment sets CONFIG_XNU_NATIVE_AES), libpthread, the
 # mockfs fixture (the OS fragment sets CONFIG_XNU_SOURCE_MOCKFS), the PMGR bridge (CONFIG_XNU_SHENG_PMGR: AMFI needs an
@@ -31,6 +35,7 @@ patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches
 # transport (CONFIG_XNU_NATIVE_UFS: ShengUfs's NativeUfs, built by its own component recipe). The order
 # follows UniXNU-sheng: the policy archive before the driver that references it.
 archives = [
+  "build-fuxi-root-auth.py",
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
   "component:ArmDTPlatform",
