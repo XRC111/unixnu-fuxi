@@ -1,0 +1,120 @@
+name: userdata image
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "1 = only check the IPSW windows against the unixnu capacity; 0 = build and upload"
+        default: "1"
+      unixnu_ref:
+        description: OddlyLabs/UniXNU ref (branch fuxi)
+        default: 6ae4c252937ae1920ab68eaded10fc78447e0194
+      xcode:
+        description: Xcode version of the macos-26 image
+        default: "26.6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: userdata-${{ github.run_id }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  UNIXNU_REPO: OddlyLabs/UniXNU
+  UNIXNU_REF: ${{ inputs.unixnu_ref || '6ae4c252937ae1920ab68eaded10fc78447e0194' }}
+  XCODE: ${{ inputs.xcode || '26.6' }}
+
+jobs:
+  userdata:
+    name: unixnu root image
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: fuxi
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.UNIXNU_REPO }}
+          ref: ${{ env.UNIXNU_REF }}
+          path: unixnu
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Select Xcode
+        run: |
+          dir="/Applications/Xcode_${XCODE}.app"
+          if [ ! -d "$dir" ]; then
+            dir=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          fi
+          [ -n "$dir" ] && [ -d "$dir" ] || { echo "::error::no Xcode 26 on this image"; exit 1; }
+          echo "DEVELOPER_DIR=$dir/Contents/Developer" >> "$GITHUB_ENV"
+      - name: Install host tools
+        run: |
+          brew install llvm lld mtools dtc openssl@3
+          if ! command -v unifdef >/dev/null; then brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; fi
+      - name: Select the device
+        working-directory: unixnu
+        run: ./unixnu defconfig fuxi_defconfig --device "$GITHUB_WORKSPACE/fuxi"
+      - name: Check the windows against the partition (dry run)
+        if: inputs.dry_run == '1'
+        working-directory: unixnu
+        run: ./unixnu build userdata --device "$GITHUB_WORKSPACE/fuxi" --dry-run
+      - name: Build the image
+        if: inputs.dry_run != '1'
+        working-directory: unixnu
+        run: ./unixnu build userdata --device "$GITHUB_WORKSPACE/fuxi"
+      - name: Report and encrypt
+        if: inputs.dry_run != '1'
+        run: |
+          set -eu
+          image=$(find "$GITHUB_WORKSPACE/unixnu/out" -path '*/userdata/userdata-root.img' | head -n 1)
+          report=$(find "$GITHUB_WORKSPACE/unixnu/out" -path '*/userdata/userdata-root.json' | head -n 1)
+          [ -n "$image" ] && [ -n "$report" ] || { echo "::error::no userdata image or report"; exit 1; }
+          ls -l "$image"
+          cat "$report"
+          openssl="$(brew --prefix openssl@3)/bin/openssl"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$report" "$RUNNER_TEMP/out/userdata-root.json"
+          # The image carries Apple's OS and SystemOS disk images, so it leaves the runner only
+          # encrypted to the owner's key, exactly like the boot image.
+          shasum -a 256 "$image" | sed "s#  .*#  userdata-root.img#" > "$RUNNER_TEMP/out/userdata-root.img.sha256"
+          "$openssl" rand -hex 32 > "$RUNNER_TEMP/boot.key"
+          "$openssl" enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$image" -out "$RUNNER_TEMP/out/userdata-root.img.enc" \
+            -pass file:"$RUNNER_TEMP/boot.key"
+          "$openssl" pkeyutl -encrypt -pubin -inkey "$GITHUB_WORKSPACE/fuxi/ci/boot-image-recipient.pem" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -in "$RUNNER_TEMP/boot.key" -out "$RUNNER_TEMP/out/userdata-root.key.enc"
+          rm -f "$RUNNER_TEMP/boot.key"
+          ls -l "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.dry_run != '1'
+        with:
+          name: fuxi-userdata-image-encrypted-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/out/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Collect the text logs
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          find unixnu/out -path '*/logs/*.log' -size -20M -exec cp {} "$RUNNER_TEMP/logs/" \; 2>/dev/null || true
+          ls -l "$RUNNER_TEMP/logs" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: fuxi-userdata-logs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove proprietary inputs
+        if: always()
+        run: rm -rf unixnu/out/ipsw unixnu/out/feeds fuxi/.cache/firmware unixnu/out/*/*/*/userdata
