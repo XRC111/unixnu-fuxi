@@ -19,7 +19,7 @@ fork [OddlyLabs/UniXNU](https://github.com/OddlyLabs/UniXNU) (branch `fuxi`).
 | 存储根策略 | 用 `kits/VerifiedRoot` 给两个窗口签所有者策略。**策略是 header-only 的**：内核里只放 544 字节信封，每 4 KiB 块的 SHA-256 表放进根镜像的 `OS.vroot`、`SystemOS.vroot` 数据对象。原因是全量信封让 `boot.img` 涨到 203.6 MiB，而 fuxi 的 ABL 拒绝任何超过 `boot_a` 分区（192 MiB）的镜像；header-only 把它压回 138 MiB（`evidence/2026-11-14-header-only-policy.md`） |
 | RAM 块设备 | 2026-11-03 接入 `RamBlock`：引导器交来的内存盘作为块设备发布，APFS 可以挂上去，用来从内存启动 IPSW 里的恢复盘。加 `rd=md0-ramblock` 后 `launchd`、`restored_external` 都跑起来了，这是这台手机上第一次跑起 iOS 的用户态 |
 | CPU | 2026-11-02 上机：`sheng-smp=1 armcpu-spi-ipi=1` 时 7 个副核都经 PSCI 启动成功，调度器认到 8 个核；再加 `armcpu-self-ipi=1` 核间中断才通。两个小核（1、2 号）还没见到时钟中断。2026-11-03：去掉 `armcpu-spi-ipi=1` 时核间中断送不到（SGI 在这台机器上不通）；9 次多核启动里有 1 次副核全都没起来，原因未知 |
-| 显示 | 参数已全部提取并在运行中的系统上核对过，只读探针已写好（见下文「显示线」）。完整实现还差 `NativeLegacyDisplay` 的 prelink 候选 |
+| 显示 | 参数已提取并在运行中的系统上核对过；只读探针读固件的 `FB_HANDOFF` 记录（见下文「显示线」）。完整实现还差 `NativeLegacyDisplay` 的 prelink 候选 |
 
 ### 存储线走到哪一步
 
@@ -90,12 +90,61 @@ VerifiedRoot 策略签名，所以 APFS 答「不是」。
 | MDP | `0xae00000+0x84000`，IRQ 83；ctl0 `0x16000`、mixer0 `0x45000`、intf1 `0x36000`、vig0 `0x5000`、dsc `0x81000`、cdm `0x7a200` |
 | DSI | ctrl0 `0xae94000+0x1000`，phy0 `0xae95500`（common `0xae95000+0xa00`） |
 
-代码目前只有 `package/FuxiDisplayProbe.cpp`：一个**只读**探针，从 `PE_current_console` 取固件交过来的
-扫描输出，报告几何、stride、depth 和基址；`fuxi-display=2` 时再读固件留下的 DPU 管道状态。它由
-`patches/xnu/fuxi-display-probe.patch` 在 `bsd_init` 里调用，默认不发声。
+### 固件怎么把帧缓冲交给内核
+
+`PE_current_console` 描述的是控制台选的显示，不一定是真正扫描输出的那个。固件里负责编程面板的驱动
+另外写了一条记录，并且在 base、width、height、pitch 全部就位之后才最后写上 magic
+（uefi-fuxi `Silicon/Silicium/SiliciumPkg/Include/Library/FrameBufferHandoff.h`）：
+
+```c
+#define FB_HANDOFF_MAGIC   0x4F474246   /* "FBGO" */
+#define FB_HANDOFF_OFFSET  0x40
+typedef struct {
+  UINT32 Magic, Width, Height, PitchBytes;
+  UINT64 Base;
+} FB_HANDOFF;                            /* 24 bytes */
+```
+
+记录落在 `Display Reserved` 区末尾：`Region.Address + Region.Length - 0x40`。这个区就是设备树里的
+`cont_splash_region`，即 `0xb8000000 + 0x2b00000`，所以记录在 `0xbaafffc0`。两个数通过启动参数传进去
+（`fuxi-display-base`、`fuxi-display-size`），探针不去走内存映射表。
+
+`PE_parse_boot_argn` 原生接受 `0x` 十六进制（`getval` 看到 `0x` 前缀就把 radix 设成 16），所以这两个参数
+按写法直接解析。
+
+### 代码现状
+
+`package/FuxiDisplayProbe.cpp` 是**只读**探针：
+
+1. 读 `FB_HANDOFF`，报告宽高、pitch 和基址，并核对是否等于面板的 1080×2400 与 4 字节/像素；
+2. 用 `PE_current_console` 取一次控制台描述符做交叉验证，两者几何不一致就报告；
+3. `fuxi-display=2` 时再读固件留下的 DPU 管道状态（ctl0 layer0、intf1、vig0 fetch）。
+
+它由 `patches/xnu/fuxi-display-probe.patch` 在 `bsd_init` 里调用（紧跟触控探针），默认不发声。
 
 完整的显示契约（`NativeLegacyDisplay` 绑定到原始 MobileFramebuffer）还需要目标 OS 版本的 prelink 候选，
 这个移植暂时没有，所以先做不依赖它的那一半。
+
+### 寄存器语义的来源
+
+和 UniXNU-sheng 一样，不靠猜：`facts/display_inputs.json` 把 Linux mainline 的 msm DPU 源码固定到具体
+commit，逐个文件记下字节数和 SHA-256：
+
+```
+drivers/gpu/drm/msm/disp/dpu1/dpu_hw_mdss.h          8569 bytes
+drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c          23907
+drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.c         19535
+drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c         22891
+drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c      22008
+drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h  10877
+drivers/gpu/drm/msm/msm_mdss.c                      15472
+```
+
+其中 4 个文件与 sheng 记录的哈希一致，说明 SM8550 的显示块是同一个，偏移可以直接对照。已经交叉核对的一项：
+`dpu_9_0_sm8550.h` 的 `max_linewidth = 5120`（0x1400）与设备树的 `qcom,sde-sspp-linewidth` 完全一致。
+
+`facts/display_inputs.json` 里还写明了三条限制：探针还没上机跑过、XNU 显示契约缺 prelink 候选、
+寄存器采样推不出刷新率和 VBL。
 
 ## 相关仓库
 
@@ -129,7 +178,7 @@ UniXNU 自己提供启动菜单（UniXNUPkg）和 XNU 加载器（DarwinBoot）�
 | `porting.toml` | 移植记录（UniXNU 格式） |
 | `tests/board_test.c` | 板级常量测试 |
 | `ci/boot-image-recipient.pem`、`ci/decrypt-boot-image.sh`、`ci/check-boot-image.py` | 启动镜像加密用的公钥、本地解密脚本，以及启动前核对镜像的脚本 |
-| `facts/` | 从官方设备树导出的触控、面板、GPU 和保留内存事实，以及 73 组面板 DSI 命令序列 |
+| `facts/` | 从官方设备树导出的触控、面板、显示引擎、GPU 和保留内存事实，73 组面板 DSI 命令序列，以及显示寄存器语义所依据的 mainline 源码清单 |
 | `evidence/` | 每一条上机结论，按日期，写清命令和看到的东西 |
 
 本地另有 `dtb/`、`firmware/`、`power/`、`ref_src/` 四个目录，不进 Git（见 `.gitignore`）：官方 DTB 和触控固件是厂商文件；dmesg 里有使用痕迹；`ref_src/` 是 GPL 参考源码，只供查阅。
