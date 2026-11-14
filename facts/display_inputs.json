@@ -1,0 +1,58 @@
+{
+ "comment": "Register semantics for the fuxi display probe. The SM8550 display block is the one sheng pins, so the same reviewed sources apply; this file states which revisions the offsets in facts/display_engine_facts.json were checked against.",
+ "upstream": {
+  "repository": "https://github.com/ianchb/sm8550-mainline",
+  "commit": "42f3b40c702abbc37c3a04c95af008cd283aeaf3"
+ },
+ "files": {
+  "drivers/gpu/drm/msm/disp/dpu1/dpu_hw_mdss.h": {
+   "bytes": 8569,
+   "sha256": "c66a80dde1a8cd1c5d8a3f09286ac7a94de0d6dc4e2f126297e9f9e4dd891ff3",
+   "agrees_with_sheng": true
+  },
+  "drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c": {
+   "bytes": 23907,
+   "sha256": "378cb80d82dfda24b29fce0f19266449beeba377c63dce1dd1671cff9e85f685"
+  },
+  "drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.c": {
+   "bytes": 19535,
+   "sha256": "7278b79fbc8902211b66283a4a367e74201de91239f4432fd2a8dc723353ef6d",
+   "agrees_with_sheng": true
+  },
+  "drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c": {
+   "bytes": 22891,
+   "sha256": "0d71a8c897aae490f63cfc8306a9bf62157a6b3288dbf07e7da06e3a74e45c22"
+  },
+  "drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c": {
+   "bytes": 22008,
+   "sha256": "93e6532b1afd723678e4b90929b042f432904e02936a9d302031462c09d36d2d",
+   "agrees_with_sheng": true
+  },
+  "drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_9_0_sm8550.h": {
+   "bytes": 10877,
+   "sha256": "9d5c9a94429eef2745b27d8eacda91f3253016149d5d31be1bf1968f47b6234e",
+   "agrees_with_sheng": true
+  },
+  "drivers/gpu/drm/msm/msm_mdss.c": {
+   "bytes": 15472,
+   "sha256": "092b2bbd3b57a03468663c3267a6bf7a47b4e8b79d656933a9a55b642d656f4d",
+   "agrees_with_sheng": true
+  }
+ },
+ "device_tree": {
+  "source": "/sys/firmware/devicetree/base on this phone, decompiled 2026-11-14",
+  "decompiled_to": "fuxi-live.dts (1516227 characters, not committed)",
+  "extracted_into": "facts/display_engine_facts.json",
+  "note": "The offsets are the driver own block offsets from qcom,sde-*-off, not physical addresses; the physical windows come from the same tree reg properties."
+ },
+ "runtime": {
+  "source": "adb from the running HyperOS system, 2026-11-14, with the panel live",
+  "recorded_in": "facts/display_engine_facts.json under runtime_verified",
+  "why": "The tree says what the panel can do; the running driver says what it chose, which is what the port has to reproduce."
+ },
+ "limitations": [
+  "The probe is read-only and has not run on the device yet, so no fuxi register value is confirmed against a target-side read.",
+  "The XNU display contract (NativeLegacyDisplay binding to the original MobileFramebuffer) needs the prelinked candidates of the target OS build, which this port does not have; the present code stops before that boundary.",
+  "No refresh rate, frame deadline or VBL follows from sampling registers; those come from the panel timings and from what the compositor asks for."
+ ]
+}

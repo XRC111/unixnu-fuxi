@@ -121,6 +121,11 @@ panic_screen = true
 # starts the HID device that turns its contacts into reports (kits/fuxi/FuxiHidProbe.cpp; sheng-touch-hid=1 gives that device
 # its digitizer collection), and fuxi-touch-panic=2 panics with the probe's rows after the first lift, so the result can be
 # read from the panic screen. Without a touch the boot ends in the root device wait.
+# fuxi-display=1 runs the read-only display probe (package/FuxiDisplayProbe.cpp). It reads the frame
+# buffer the firmware publishes in the FB_HANDOFF record at the end of the display reserved region,
+# which is the device tree cont_splash_region: 0xb8000000 + 0x2b00000, so the record is at
+# 0xb8000000 + 0x2b00000 - 0x40. Both numbers come from the live tree (splash_region node) and are
+# passed as arguments so the probe does not walk the memory map.
 # native-ufs-probe=11 (ShengUfs NativeUfs, CONFIG_XNU_NATIVE_UFS): read-only window check on the unixnu partition. It adopts the controller the
 # firmware left running (stops its request list, refuses an outstanding request), wakes the device with START STOP UNIT
 # (power condition ACTIVE, the Linux resume path, no user data touched), then per LUN TEST UNIT READY + READ CAPACITY,
@@ -133,7 +138,8 @@ panic_screen = true
 # rooted-ramdisk marker, so bsd_init skips the sealed root check and still walks to the volume root_match_volume_uuid names
 # (bsd_init.c; evidence/2026-11-02-first-boot.md, image r3-ramblock).
 kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "sheng-pmgr=2", "sheng-smp=1", "armcpu-spi-ipi=1",
-               "armcpu-self-ipi=1", "native-ufs-root=1", "fuxi-display=1"]
+               "armcpu-self-ipi=1", "native-ufs-root=1", "fuxi-display=1",
+               "fuxi-display-base=0xb8000000", "fuxi-display-size=0x2b00000"]
 # The trust cache the payload carries as kernel.macho.trustcache. DarwinBoot's ValidTrustCaches
 # (drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c) reads a container of version 2 modules, and the IPSW's
 # RestoreTrustCache is a version 1 module (uuid cfc8a0d56fb24d6c8b9bd3976ce18057, 267 entries of 22 bytes), so
