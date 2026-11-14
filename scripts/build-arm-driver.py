@@ -10,6 +10,33 @@ import sys
 from kernel_target import ARCH, TRIPLE, check_object
 
 ROOT = Path(__file__).resolve().parents[1]
+POLICY_STUB = """// Device override (XRC111/unixnu-fuxi): a CI build carries no signed volume policy, so the
+// kernel gets an empty policy list and a refusing verification entry point instead of the real
+// ones. configureVerification() rejects a zero count before calling vr_*, and the UFS probes are
+// default off and never read a block, so nothing is authenticated at bring-up.
+#include <stddef.h>
+#include <stdint.h>
+#include "verified_root.h"
+#include "VerifiedBlockPolicy.h"
+
+extern "C" {
+
+const NativeVerifiedBlockPolicy verified_root_policies[1] = {nullptr, 0};
+const uint64_t verified_root_policy_count = 0;
+const uint8_t verified_root_key[VR_KEY_BYTES] = {0};
+const struct vr_crypto vr_xnu_crypto = {nullptr, nullptr};
+
+int vr_open (const uint8_t *, size_t, const uint8_t[VR_KEY_BYTES], uint64_t,
+             const struct vr_crypto *, struct vr_view *) { return VR_FORMAT; }
+int vr_open_header (const uint8_t *, size_t, const uint8_t[VR_KEY_BYTES], uint64_t,
+                    const struct vr_crypto *, struct vr_view *) { return VR_FORMAT; }
+int vr_verify_block (const struct vr_view *, uint64_t, const void *, size_t,
+                     const struct vr_crypto *) { return VR_FORMAT; }
+void boot_progress_poll (void) {}
+
+}
+"""
+
 parser = argparse.ArgumentParser(description=__doc__)
 catalog = {entry['id']: entry for entry in tomllib.loads((ROOT / 'components.toml').read_text())['component']
            if entry['kind'] == 'driver' and any(name.endswith('.cpp') for name in entry.get('source_files', []))}
@@ -94,15 +121,12 @@ if component in ('NativeVirtioBlock', 'NativeRamBlock', 'NativeUfs'):
     if args.verified_root_bundle:
         command += ['-DNATIVE_VERIFIED_BLOCK_MULTI_POLICY=1']
 if component == 'NativeUfs':
-    # Device override (XRC111/unixnu-fuxi): the CI image carries no signed volume policy, so the
-    # authenticated handoff cannot be linked -- vr_* / verified_root_* / verified_root_key /
-    # verified_root_policies would stay undefined. The UFS probes are default off and never read a
-    # block, so NativeUfs is compiled without the handoff. -mgeneral-regs-only stays: it is a kernel
-    # ABI requirement, not part of the handoff.
+    # Device override (XRC111/unixnu-fuxi): keep the handoff macros -- NativeUfs.cpp defines
+    # timerTicks / native_ufs_read_ticks inside the NATIVE_VERIFIED_BLOCK block but uses them from
+    # read(), so the file does not compile without it. The missing definitions come from
+    # verified-policy.cpp below instead of a real signed policy.
     command += ['-I', str(ROOT / 'kits/VerifiedRoot/include'), '-I', str(ROOT / 'drivers/VirtioMmioBlock'),
-                '-mgeneral-regs-only',
-                # NativeUfs.cpp mixes IOReturn (int) and uint32_t in the diagnostic ternary; the
-                # handoff build does not compile that path, the plain build does.
+                '-DNATIVE_VERIFIED_BLOCK=1', '-DNATIVE_VERIFIED_BLOCK_MULTI_POLICY=1', '-mgeneral-regs-only',
                 '-Wno-sign-conversion']
 if component=='NativeOfflineGPU':
     command += ['-I',str(ROOT/'drivers/VirtioMmioConsole')]
@@ -120,20 +144,20 @@ if result.returncode:
 check_object(destination.read_bytes(), component)
 objects = [destination]
 if component == 'NativeUfs':
-    # NativeUfs.cpp declares boot_progress_poll strong under NATIVE_UFS_SOURCE_API and weak
-    # otherwise; a weak no-op in the same archive satisfies both forms.
-    noop_source = out / 'boot-progress.c'
-    noop_source.write_text('__attribute__((weak)) void boot_progress_poll (void) { }\n')
-    noop_object = out / 'boot-progress.o'
-    noop_command = list(command)
-    noop_command[noop_command.index(str(source))] = str(noop_source)
-    noop_command[noop_command.index(str(destination))] = str(noop_object)
-    noop_result = subprocess.run(noop_command, cwd=record['directory'], stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT, text=True)
-    (out / 'boot-progress.log').write_text(noop_result.stdout)
-    if noop_result.returncode:
-        raise SystemExit(noop_result.stdout[-3500:])
-    objects.append(noop_object)
+    # An empty policy list makes configureVerification() refuse before any vr_* call; the UFS
+    # probes never read a block, so nothing authenticates at bring-up.
+    policy_source = out / 'verified-policy.cpp'
+    policy_source.write_text(POLICY_STUB)
+    policy_object = out / 'verified-policy.o'
+    policy_command = list(command)
+    policy_command[policy_command.index(str(source))] = str(policy_source)
+    policy_command[policy_command.index(str(destination))] = str(policy_object)
+    policy_result = subprocess.run(policy_command, cwd=record['directory'], stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+    (out / 'verified-policy.log').write_text(policy_result.stdout)
+    if policy_result.returncode:
+        raise SystemExit(policy_result.stdout[-3500:])
+    objects.append(policy_object)
 archive = out / ('lib' + identifier + '.a')
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *map(str, objects)], check=True)
