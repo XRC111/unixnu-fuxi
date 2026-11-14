@@ -101,7 +101,7 @@ panic_screen = true
 # starts the HID device that turns its contacts into reports (kits/fuxi/FuxiHidProbe.cpp; sheng-touch-hid=1 gives that device
 # its digitizer collection), and fuxi-touch-panic=2 panics with the probe's rows after the first lift, so the result can be
 # read from the panic screen. Without a touch the boot ends in the root device wait.
-# native-ufs-probe=9 (ShengUfs NativeUfs, CONFIG_XNU_NATIVE_UFS): read-only UFS survey. It adopts the controller the
+# native-ufs-probe=10 (ShengUfs NativeUfs, CONFIG_XNU_NATIVE_UFS): read-only root check on the unixnu partition. It adopts the controller the
 # firmware left running (stops its request list, refuses an outstanding request), wakes the device with START STOP UNIT
 # (power condition ACTIVE, the Linux resume path, no user data touched), then per LUN TEST UNIT READY + READ CAPACITY,
 # INQUIRY of LUN 0, and a GPT survey of LUN 0 (header CRCs, disk GUID, every non-empty entry among the first 64 with
@@ -113,7 +113,7 @@ panic_screen = true
 # rooted-ramdisk marker, so bsd_init skips the sealed root check and still walks to the volume root_match_volume_uuid names
 # (bsd_init.c; evidence/2026-11-02-first-boot.md, image r3-ramblock).
 kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "sheng-pmgr=2", "sheng-smp=1", "armcpu-spi-ipi=1",
-               "armcpu-self-ipi=1", "rd=md0-ramblock", "native-ufs-probe=9"]
+               "armcpu-self-ipi=1", "rd=md0-ramblock", "native-ufs-probe=10"]
 # The trust cache the payload carries as kernel.macho.trustcache. DarwinBoot's ValidTrustCaches
 # (drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c) reads a container of version 2 modules, and the IPSW's
 # RestoreTrustCache is a version 1 module (uuid cfc8a0d56fb24d6c8b9bd3976ce18057, 267 entries of 22 bytes), so
@@ -138,5 +138,7 @@ root_match_volume_uuid = "9071148B-B025-402D-AD7A-48464D8B5FFF"
 # The restore ramdisk travels packed (DBRDISK1, scripts/pack-data-ramdisk.py): 176 MiB dense does not fit the 192 MiB
 # payload volume next to the prelinked kernel, 131 MiB packed does.
 packed_data_ramdisk = true
+
+
 
 
