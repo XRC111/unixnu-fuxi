@@ -30,8 +30,8 @@ patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches
 # ApplePMGRNub service), ShengHidInput's touch digitizer (force-loaded by fuxi_defconfig; the touch probe starts it), the RAM
 # block (CONFIG_XNU_NATIVE_RAM_BLOCK: a RAM disk from the loader as a block device), the touch archive that bsd_init
 # calls into (patches/xnu/fuxi-touch-probe.patch), and the UFS transport (CONFIG_XNU_NATIVE_UFS: ShengUfs's NativeUfs,
-# built by scripts/build-sheng-ufs.py without the authenticated policy handoff, whose policy data is a real signed
-# volume policy). The order follows UniXNU-sheng.
+# built through scripts/build-arm-driver.py, overridden on this device to drop the authenticated policy handoff:
+# its policy data is a real signed volume that a CI build does not carry). The order follows UniXNU-sheng.
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
@@ -44,7 +44,7 @@ archives = [
   "build-fuxi-platform-power.py",
   "build-fuxi-hid-input.py",
   "build-fuxi-ram-block.py",
-  "build-sheng-ufs.py",
+  "component:ShengUfs",
   "build-fuxi-touch.py",
 ]
 
