@@ -132,7 +132,7 @@ panic_screen = true
 # rooted-ramdisk marker, so bsd_init skips the sealed root check and still walks to the volume root_match_volume_uuid names
 # (bsd_init.c; evidence/2026-11-02-first-boot.md, image r3-ramblock).
 kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "sheng-pmgr=2", "sheng-smp=1", "armcpu-spi-ipi=1",
-               "armcpu-self-ipi=1", "rd=md0-ramblock", "native-ufs-probe=11"]
+               "armcpu-self-ipi=1", "native-ufs-root=1"]
 # The trust cache the payload carries as kernel.macho.trustcache. DarwinBoot's ValidTrustCaches
 # (drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c) reads a container of version 2 modules, and the IPSW's
 # RestoreTrustCache is a version 1 module (uuid cfc8a0d56fb24d6c8b9bd3976ce18057, 267 entries of 22 bytes), so
@@ -153,7 +153,7 @@ owned_memory_size = "0x130000000"
 # iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw is an IM4P whose payload is the whole container (176 MiB, 4096 byte blocks,
 # 45056 blocks); its volume superblock carries this UUID, which scripts/unpack-restore-ramdisk.py reads back before the
 # image is packed.
-root_match_volume_uuid = "9071148B-B025-402D-AD7A-48464D8B5FFF"
+root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 # The restore ramdisk travels packed (DBRDISK1, scripts/pack-data-ramdisk.py): 176 MiB dense does not fit the 192 MiB
 # payload volume next to the prelinked kernel, 131 MiB packed does.
 packed_data_ramdisk = true
