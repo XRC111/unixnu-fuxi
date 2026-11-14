@@ -41,7 +41,7 @@ SystemOS.vroot   off=0x232200000  size=  25804800  blk=4096  flags=3
 
 `flags=3` 是 data object，`readPolicyTable` 正是按这个名字和大小去找的。
 
-### 根卷挂上了，但 Apple 不认它的密封
+### 越过 Apple 密封检查
 
 2026-11-14 第一次跑 root 模式，panic 屏上出现的是：
 
@@ -69,9 +69,54 @@ VerifiedRoot 策略签名，所以 APFS 答「不是」。
 （`rdBootVar[3] == 0`），而 `md0-ramblock` 不满足，于是退到 `IOBSDNameMatching("md0-ramblock")`，
 匹配不到任何设备，`waitForService` 会一直等下去。**用 `rd` 跳过检查会连挂载一起弄坏。**
 
-**实际采用的做法**：`patches/xnu/fuxi-owner-root-auth.patch` 把那个 `panic` 换成一行报告。这个改动只
-降低「Apple 是否认可密封」这一关，不改变「数据是否可信」：NativeUfs 在发布每个 4 KiB 块之前已经
-按所有者策略验过哈希，未经所有者签名的读取照样失败。补丁的注释里写着同样的理由。
+**实际采用的做法**：`scripts/build-fuxi-root-auth.py` 把那个 `panic` 换成一行报告。这个改动只降低
+「Apple 是否认可密封」这一关，不改变「数据是否可信」：NativeUfs 在发布每个 4 KiB 块之前已经按所有者
+策略验过哈希，未经所有者签名的读取照样失败。
+
+它是 **archive 步骤**而不是补丁：触控探针和显示探针都已经在改 `bsd_init.c`，第三个基于 hunk 的补丁
+每次都要跟着重算行号（CI 上连挂两次，先是 `:943` 再是 `:957`）。`kernel.py` 先应用补丁系列、后跑
+`[kernel] archives`，所以脚本看到的是补丁后的文件，直接匹配那条 panic 语句本身，与行号无关。它幂等，
+语句位置变了就报错退出，不会瞎改。
+
+### launchd 跑起来了
+
+越过密封检查之后，2026-11-14 的启动到了这里：
+
+```
+initproc failed to start -- exit reason namespace 6 subcode 0x1
+description: Library not loaded: /usr/lib/libSystem.B.dylib
+ Referenced from: <4B525992-…> /sbin/launchd
+ Reason: tried: '/usr/lib/libSystem.B.dylib' (no such file, no dyld cache)
+```
+
+**这是这台手机上第一次从 UFS 根启动用户态进程。** `launchd` 真的被 exec 了，卡在加载
+`libSystem.B.dylib`。
+
+问题在于那个库在 iOS/iPadOS 上**本来就不是文件**：它在 dyld 共享缓存里，而缓存又可能来自另一个卷。
+iPadOS 17 的布局大致是：
+
+```
+OS 卷    → /System/Library/Caches/com.apple.dyld/
+SystemOS → /System/Cryptexes/OS/…
+```
+
+我们只发布了 OS 和 SystemOS 两个窗口，`/System/Cryptexes/OS` 还没挂载。
+
+### 下一个探针：先看，再决定挂什么
+
+与其猜该挂哪个卷，不如让内核把看到的说出来。`package/FuxiRootCheck.cpp` 在 `bsd_init` 里、显示探针
+之后、文件系统起来之前，用 `namei` 逐个查这些路径：
+
+```
+/usr/lib/libSystem.B.dylib          /System/Cryptexes
+/usr/lib/dyld                       /System/Cryptexes/OS
+/System/Library/Caches/com.apple.dyld   /System/Cryptexes/App
+/System/Library/dyld                /sbin/launchd
+/private/var                        /private/preboot
+```
+
+每个路径报告存在与否（目录会标 `(dir)`），最后给一行汇总。它只读、不改任何东西，由启动参数
+`fuxi-root-check=1` 打开。有了这份清单，下一步该挂哪个卷就是从观测得出的，而不是试出来的。
 
 ## 显示线
 
@@ -168,6 +213,9 @@ UniXNU 自己提供启动菜单（UniXNUPkg）和 XNU 加载器（DarwinBoot）�
 | `scripts/build-fuxi-touch.py` | 用 XNU 构建的编译记录编译探针和驱动，打包成 `libFuxiTouch.a` |
 | `scripts/build-arm-driver.py` | 用同一份编译记录编译 catalog 里的 ARM 驱动（`NativeUfs` 走它）；对 NativeUfs 做三处设备侧覆盖，见文件开头 |
 | `scripts/build-fuxi-display.py` | 用同一份编译记录编译显示探针，打包成 `libFuxiDisplay.a` |
+| `scripts/build-fuxi-root-auth.py` | archive 步骤：把 `bsd_init` 里 ROOTAUTH 的 panic 换成一行报告（见「越过 Apple 密封检查」） |
+| `scripts/build-fuxi-root-check.py`、`scripts/build-fuxi-root-check-call.py` | 编译根布局探针并在 `bsd_init` 里调用它 |
+| `package/FuxiRootCheck.cpp` | 只读探针：报告挂根之后哪些关键路径存在（见「下一个探针」） |
 | `package/FuxiDisplayProbe.cpp` | 只读显示探针：取固件交过来的扫描输出并报告几何，`fuxi-display=2` 时读 DPU 管道状态 |
 | `scripts/build-fuxi-root-policy.py` | 给两个 IPSW 窗口签所有者策略，产出 544 字节信封和 `<窗口>.vroot` 哈希表；`--no-archive` 只做镜像侧产物 |
 | `scripts/build-fuxi-platform-power.py`、`ci/check-pmgr-bridge.py` | 编译 PMGR 桥（改自 sheng 的构建脚本，改动见文件开头）；CI 在链接后核对它和 AMFI 的约定 |
