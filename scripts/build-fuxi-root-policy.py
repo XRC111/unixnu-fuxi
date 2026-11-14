@@ -189,14 +189,36 @@ def main() -> int:
                         default=Path(os.environ['UNIXNU_IPSW_DIR']) if os.environ.get('UNIXNU_IPSW_DIR') else None,
                         help='directory holding 044-76040-038.dmg and 044-76034-038.dmg '
                              '(default: $UNIXNU_IPSW_DIR, exported by ci/build.yml from ./unixnu ipsw fetch)')
+    parser.add_argument('--no-archive', action='store_true',
+                        help='write only the header-only envelopes and .vroot objects, skipping the kernel '
+                             'archive (that step needs bsd_init.o.json, which only "build kernel" writes, '
+                             'so an image-only run cannot do it)')
     parser.add_argument('sources', nargs='*', help='ignored; board.toml entries stay uniform')
     args = parser.parse_args()
+    if not args.ipsw_dir:
+        fail('pass --ipsw-dir or export UNIXNU_IPSW_DIR')
 
     keys = ROOT / 'build/verified-root-fuxi/keys'
     private, public = ensure_keys(keys)
 
     for name, spec in WINDOWS.items():
         sign_window(name, spec, args.ipsw_dir, keys, private, public)
+
+    report = dict(shape='header-only', envelope_bytes=ENVELOPE_BYTES,
+                  windows=[dict(window=spec['window'], directory=name,
+                                envelope=str((ROOT / 'build' / f'verified-root-{name}' / 'manifest.bin').relative_to(ROOT)),
+                                vroot=str((ROOT / 'build' / f'verified-root-{name}' / f'{spec["window"]}.vroot').relative_to(ROOT)),
+                                block_count=(ROOT / 'build' / f'verified-root-{name}' / 'hashes.bin').stat().st_size // 32)
+                           for name, spec in WINDOWS.items()])
+    report['total_table_bytes'] = sum(entry['block_count'] * 32 for entry in report['windows'])
+    (ROOT / 'build/verified-root-header-only.json').write_text(json.dumps(report, indent=2) + '\n')
+    print(f'header-only: {report["total_table_bytes"]} table bytes kept out of the kernel')
+    for entry in report['windows']:
+        print(f'  --object {entry["window"]}.vroot={entry["vroot"]}')
+
+    if args.no_archive:
+        print('build-fuxi-root-policy: envelopes and .vroot objects only (--no-archive)')
+        return 0
 
     # build-verified-root-probe.py reads the SystemOS image from .cache/firmware,
     # so point that at the fetched copy instead of duplicating 3 GB.
@@ -211,6 +233,11 @@ def main() -> int:
     # -I build/xnu/ios-obj/EXPORT_HDRS/libsa; XNU only creates that directory for some targets, and
     # clang treats a missing -I as an error under -Werror.
     (ROOT / 'build/xnu/ios-obj/EXPORT_HDRS/libsa').mkdir(parents=True, exist_ok=True)
+
+    recipe = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/bsd_init.o.json'
+    if not recipe.is_file():
+        fail(f'{recipe} is missing; the kernel archive needs a completed "unixnu build kernel", '
+             'or run with --no-archive for the image-only outputs')
 
     result = subprocess.run([sys.executable, str(ROOT / 'scripts/build-verified-root-probe.py'),
                              '--component', 'os', '--include-systemos'], cwd=ROOT)

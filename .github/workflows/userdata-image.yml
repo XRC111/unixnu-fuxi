@@ -64,6 +64,12 @@ jobs:
       - name: Select the device
         working-directory: unixnu
         run: ./unixnu defconfig fuxi_defconfig --device "$GITHUB_WORKSPACE/fuxi"
+      - name: Fetch the component sources
+        working-directory: unixnu
+        run: |
+          # scripts/build-fuxi-root-policy.py imports kits/VerifiedRoot/tools/manifest.py, which the
+          # component catalog supplies; without this step the signing script cannot start.
+          ./unixnu fetch --device "$GITHUB_WORKSPACE/fuxi"
       - name: Restore the IPSW windows
         uses: actions/cache/restore@v4
         with:
@@ -92,7 +98,7 @@ jobs:
           # The kernel link wants the 544-byte header-only envelope; the image wants the matching
           # <window>.vroot objects. One run of the signing script produces both, and this step is what
           # keeps the two halves of the policy consistent.
-          python3 "$GITHUB_WORKSPACE/fuxi/scripts/build-fuxi-root-policy.py"
+          python3 "$GITHUB_WORKSPACE/fuxi/scripts/build-fuxi-root-policy.py" --no-archive
           python3 - <<'PY'
           import json
           from pathlib import Path
