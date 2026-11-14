@@ -21,9 +21,13 @@ POLICY_STUB = """// Device override (XRC111/unixnu-fuxi): a CI build carries no 
 
 extern "C" {
 
+extern const NativeVerifiedBlockPolicy verified_root_policies[];
 const NativeVerifiedBlockPolicy verified_root_policies[1] = {{nullptr, 0}};
+extern const uint64_t verified_root_policy_count;
 const uint64_t verified_root_policy_count = 0;
+extern const uint8_t verified_root_key[VR_KEY_BYTES];
 __attribute__((used)) const uint8_t verified_root_key[VR_KEY_BYTES] = {0};
+extern const struct vr_crypto vr_xnu_crypto;
 __attribute__((used)) const struct vr_crypto vr_xnu_crypto = {nullptr, nullptr};
 
 int vr_open (const uint8_t *, size_t, const uint8_t[VR_KEY_BYTES], uint64_t,
@@ -162,5 +166,6 @@ archive = out / ('lib' + identifier + '.a')
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *map(str, objects)], check=True)
 print(f'{identifier}: -Werror build and {TRIPLE} object audit passed')
+
 
 
