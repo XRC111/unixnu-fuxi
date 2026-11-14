@@ -1,0 +1,12 @@
+{
+  "comment": "Xiaomi 13 (fuxi) GPU firmware the kernel embeds in place of the reference board's. Only the ZAP shader is board data: it is signed by the phone maker and authenticated by TrustZone (PAS), so only this phone's own image runs, and the reference board's copy cannot be borrowed. GMU and SQE images stay the shared SM8550 ones. Fill bytes and sha256 from scripts/pull-fuxi-gpu-firmware.sh; the file itself stays under .cache/firmware/fuxi-gpu and never enters the repository. While sha256 is null the kernel carries an empty ZAP image and the GPU stops at its ZAP step, which is the correct failure to see before the rest of the GPU path exists.",
+  "firmware": {
+    "files": {
+      "qcom/sm8550/fuxi/a740_zap.mbn": {
+        "bytes": 12088,
+        "sha256": "d7b9ec4391ed6d5e0fbefbedfc66ede92e9c5b2b85bb8c27ee8bf6fda115efcf",
+        "source": "MIUI/HyperOS 4.0.0.12.XMCCNXM vendor /firmware/a740_zap.mdt + .b00-.b02, read with adb pull on 2026-11-14 (world readable, no root) and joined by scripts/squash-mdt.py; 12088 bytes, the same size the OnePlus Ace 3 port pins for its own A740 ZAP, so the shader is the shared one and only the signature differs"
+      }
+    }
+  }
+}

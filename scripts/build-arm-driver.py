@@ -133,8 +133,24 @@ if component == 'NativeUfs':
     # The verified-root symbols come from build/verified-root-os-xnu-bundle/libVerifiedRootProbe.a,
     # which scripts/build-fuxi-root-policy.py builds from the owner-signed manifests of the two
     # unixnu windows and which CONFIG_XNU_EXTRA_LD_ARCHIVES puts on the kernel link line. Defining
-    # them here as well would be a duplicate symbol, so the device build no longer emits a stub.
-    pass
+    # them here as well would be a duplicate symbol, so the device build does not emit them.
+    #
+    # boot_progress_poll is different: NativeUfs declares it weak and references it from every
+    # window read, and a weak reference still needs a definition in a static link. The probe archive
+    # does not carry one, so a weak no-op in the same archive satisfies the link and any later
+    # observer overrides it.
+    noop_source = out / 'boot-progress.c'
+    noop_source.write_text('__attribute__((weak)) void boot_progress_poll (void) { }\n')
+    noop_object = out / 'boot-progress.o'
+    noop_command = list(command)
+    noop_command[noop_command.index(str(source))] = str(noop_source)
+    noop_command[noop_command.index(str(destination))] = str(noop_object)
+    noop_result = subprocess.run(noop_command, cwd=record['directory'], stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True)
+    (out / 'boot-progress.log').write_text(noop_result.stdout)
+    if noop_result.returncode:
+        raise SystemExit(noop_result.stdout[-3500:])
+    objects.append(noop_object)
 archive = out / ('lib' + identifier + '.a')
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *map(str, objects)], check=True)
