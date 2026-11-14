@@ -123,15 +123,37 @@ def sign_window(name: str, spec: dict, ipsw: Path, keys: Path, private: Path, pu
     if record['image_sha256'] != spec['image_sha256']:
         fail(f'{name}: the raw image digest is {record["image_sha256"]}, not the pinned one')
 
+    # build-verified-root-probe.py audits four real blocks of the original image: block 0, block 1,
+    # the middle block and the last one. The OS image is not a whole number of 4 KiB blocks, so its
+    # last sample is short and the assembler gets it zero-padded (the shape the sheng port uses).
+    block_count = record['block_count']
+    indices = [0, 1, block_count // 2, block_count - 1]
+    lengths = [4096, 4096, 4096, spec['image_bytes'] - (block_count - 1) * 4096]
+    device = attach(dmg)
+    try:
+        raw = Path(device.replace('/dev/disk', '/dev/rdisk'))
+        with raw.open('rb', buffering=1 << 20) as stream:
+            blocks = []
+            for index, length in zip(indices, lengths):
+                stream.seek(index * 4096)
+                data = stream.read(length)
+                if len(data) != length:
+                    fail(f'{name}: short sample read at block {index}')
+                blocks.append(data.ljust(4096, b'\0'))
+    finally:
+        detach(device)
+    (output / 'original-samples.bin').write_bytes(b''.join(blocks))
+
     # The shape build-verified-root-probe.py re-reads before it will assemble the archive.
     (output / 'verification.json').write_text(json.dumps(dict(
-        image_bytes=spec['image_bytes'], blocks_verified=record['block_count'],
+        image_bytes=spec['image_bytes'], blocks_verified=block_count,
         image_sha256=record['image_sha256'], volume_uuid=str(spec['volume_uuid']).upper(),
         generation=record['generation'], trusted_key_sha256=record['trusted_key_sha256'],
+        actual_sample_indices=indices, actual_sample_lengths=lengths,
         real_c_signature_and_block_verification=True,
         original_image_modified=False, boot_root_authenticated=False,
         host_only=True, hardware_tested=False), indent=2) + '\n')
-    print(f'{name}: signed {record["block_count"]} blocks for {spec["image_bytes"]} bytes '
+    print(f'{name}: signed {block_count} blocks for {spec["image_bytes"]} bytes '
           f'({record["image_sha256"][:16]}...)')
     return output
 
