@@ -148,6 +148,15 @@ jobs:
       - name: Select the device
         working-directory: unixnu
         run: ./unixnu defconfig fuxi_defconfig --device "$GITHUB_WORKSPACE/fuxi"
+      - name: Fetch the OS and SystemOS windows
+        working-directory: unixnu
+        run: |
+          # scripts/build-fuxi-root-policy.py signs the two windows the unixnu image carries; it reads the
+          # unchanged IPSW disk images, so they have to be here before the kernel link pulls the archive in.
+          ./unixnu ipsw fetch OS "Cryptex1,SystemOS" --device "$GITHUB_WORKSPACE/fuxi"
+          dir=$(ls -d out/ipsw/* | head -n 1)
+          [ -n "$dir" ] && ls -l "$dir"
+          echo "UNIXNU_IPSW_DIR=$PWD/$dir" >> "$GITHUB_ENV"
       - name: Build kernel
         working-directory: unixnu
         env:
@@ -298,5 +307,8 @@ jobs:
       - name: Remove proprietary inputs
         if: always()
         run: rm -rf unixnu/out/ipsw unixnu/out/feeds fuxi/.cache/firmware "$RUNNER_TEMP/image" unixnu/out/*/*/*/payload
+
+
+
 
 

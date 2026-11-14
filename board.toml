@@ -42,6 +42,7 @@ archives = [
   "build-fuxi-platform-power.py",
   "build-fuxi-hid-input.py",
   "build-fuxi-ram-block.py",
+  "build-fuxi-root-policy.py",
   "component:ShengUfs",
   "build-fuxi-touch.py",
 ]
@@ -152,6 +153,7 @@ root_match_volume_uuid = "9071148B-B025-402D-AD7A-48464D8B5FFF"
 # The restore ramdisk travels packed (DBRDISK1, scripts/pack-data-ramdisk.py): 176 MiB dense does not fit the 192 MiB
 # payload volume next to the prelinked kernel, 131 MiB packed does.
 packed_data_ramdisk = true
+
 
 
 
