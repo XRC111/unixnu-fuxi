@@ -148,13 +148,27 @@ jobs:
       - name: Select the device
         working-directory: unixnu
         run: ./unixnu defconfig fuxi_defconfig --device "$GITHUB_WORKSPACE/fuxi"
+      - name: Restore the IPSW windows
+        id: ipsw-cache
+        uses: actions/cache/restore@v4
+        with:
+          # The two windows are ~8 GiB of unchanged Apple disk images and the policy step hashes all of
+          # them, so a rebuild that re-downloads them spends half an hour on the network. The key is the
+          # pinned profile: when board.toml moves to another OS profile this stops matching.
+          path: unixnu/out/ipsw
+          key: ipsw-21H461-os-systemos-v1
       - name: Fetch the OS and SystemOS windows
         working-directory: unixnu
         run: |
           # scripts/build-fuxi-root-policy.py signs the two windows the unixnu image carries; it reads the
           # unchanged IPSW disk images, so they have to be here before the kernel link pulls the archive in.
-          ./unixnu ipsw fetch OS "Cryptex1,SystemOS" --device "$GITHUB_WORKSPACE/fuxi"
-          dir=$(ls -d out/ipsw/* | head -n 1)
+          dir=$(ls -d out/ipsw/* 2>/dev/null | head -n 1)
+          if [ -n "$dir" ] && ls "$dir"/044-76040-038.dmg "$dir"/044-76034-038.dmg >/dev/null 2>&1; then
+            echo "cache hit: $dir"
+          else
+            ./unixnu ipsw fetch OS "Cryptex1,SystemOS" --device "$GITHUB_WORKSPACE/fuxi"
+            dir=$(ls -d out/ipsw/* | head -n 1)
+          fi
           [ -n "$dir" ] && ls -l "$dir"
           echo "UNIXNU_IPSW_DIR=$PWD/$dir" >> "$GITHUB_ENV"
       - name: Build kernel
@@ -304,6 +318,12 @@ jobs:
             ${{ runner.temp }}/logs/unixnu.lock
           if-no-files-found: warn
           retention-days: 7
+      - name: Save the IPSW windows
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: unixnu/out/ipsw
+          key: ipsw-21H461-os-systemos-v1
       - name: Remove proprietary inputs
         if: always()
         run: rm -rf unixnu/out/ipsw unixnu/out/feeds fuxi/.cache/firmware "$RUNNER_TEMP/image" unixnu/out/*/*/*/payload

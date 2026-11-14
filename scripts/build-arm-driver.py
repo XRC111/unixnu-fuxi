@@ -135,26 +135,43 @@ if component == 'NativeUfs':
     # unixnu windows and which CONFIG_XNU_EXTRA_LD_ARCHIVES puts on the kernel link line. Defining
     # them here as well would be a duplicate symbol, so the device build does not emit them.
     #
-    # boot_progress_poll is different: NativeUfs declares it weak and references it from every
-    # window read, and a weak reference still needs a definition in a static link. The probe archive
-    # does not carry one, so a weak no-op in the same archive satisfies the link and any later
-    # observer overrides it.
-    noop_source = out / 'boot-progress.c'
-    noop_source.write_text('__attribute__((weak)) void boot_progress_poll (void) { }\n')
-    noop_object = out / 'boot-progress.o'
-    noop_command = list(command)
-    noop_command[noop_command.index(str(source))] = str(noop_source)
-    noop_command[noop_command.index(str(destination))] = str(noop_object)
-    noop_result = subprocess.run(noop_command, cwd=record['directory'], stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT, text=True)
-    (out / 'boot-progress.log').write_text(noop_result.stdout)
-    if noop_result.returncode:
-        raise SystemExit(noop_result.stdout[-3500:])
-    objects.append(noop_object)
+    # boot_progress_poll needs care. NativeUfs has two forms behind NATIVE_UFS_SOURCE_API: with the
+    # macro set the symbol is declared strong and called directly; without it the declaration is weak
+    # and every call is guarded by a null test. The second form is the one we build, and a weak
+    # reference is not something ld64 satisfies from an archive member, which is why a separate
+    # boot-progress.o did not help: the link still reported
+    #   "_boot_progress_poll, referenced from ... libShengUfs.a[2](NativeUfs.o)".
+    # Defining it in the same translation unit keeps the definition inside the member that references
+    # it, so nothing has to be pulled in, and a real observer still overrides the weak definition.
+    noop_header = out / 'boot-progress.h'
+    noop_header.write_text(
+        '/* Injected into NativeUfs.cpp: the weak definition lands in NativeUfs.o. */\n'
+        '#ifndef FUXI_BOOT_PROGRESS_INJECTED\n'
+        '#define FUXI_BOOT_PROGRESS_INJECTED\n'
+        '/* C linkage: NativeUfs declares it inside extern "C". */\n'
+        'extern "C" __attribute__((weak)) void boot_progress_poll (void) { }\n'
+        '#endif\n')
+    injected, skip = [], False
+    for argument in command:
+        if skip:
+            skip = False
+            continue
+        if argument == '-o':
+            skip = True
+            continue
+        injected.append(argument)
+    injected += ['-include', str(noop_header), '-o', str(destination)]
+    injected_result = subprocess.run(injected, cwd=record['directory'], stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True)
+    (out / 'boot-progress.log').write_text(injected_result.stdout)
+    if injected_result.returncode:
+        raise SystemExit(injected_result.stdout[-3500:])
 archive = out / ('lib' + identifier + '.a')
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *map(str, objects)], check=True)
 print(f'{identifier}: -Werror build and {TRIPLE} object audit passed')
+
+
 
 
 
