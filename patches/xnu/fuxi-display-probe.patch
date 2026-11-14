@@ -1,0 +1,19 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 5c36885..f2c0e11 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -789,6 +789,15 @@ bsd_init(void)
+ 	/* fuxi (Xiaomi 13): staged touch controller bring-up, off unless the boot argument fuxi-touch is set.
+ 	 * It runs in its own kernel thread (package/FuxiTouchProbe.cpp of the fuxi device repository). */
+ 	extern void native_touch_probe(void);
+ 	native_touch_probe();
++
++	/* fuxi (Xiaomi 13): read the scanout the firmware handed over and the display pipe state it left,
++	 * off unless the boot argument fuxi-display is set. Read-only; package/FuxiDisplayProbe.cpp of the
++	 * fuxi device repository. Placed here so the result lands in the boot log before the file systems
++	 * come up, which is when the display driver proper has to take over. */
++	extern void fuxi_display_probe(void);
++	fuxi_display_probe();
+ #endif
+ 
+ 	/* Initialize the file systems. */
