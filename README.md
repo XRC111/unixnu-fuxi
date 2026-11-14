@@ -4,20 +4,43 @@
 [![Device documentation](https://github.com/OddlyLabs/unixnu-fuxi/actions/workflows/porting-record.yml/badge.svg)](https://github.com/OddlyLabs/unixnu-fuxi/actions/workflows/porting-record.yml)
 
 Device repository for the Xiaomi 13 (fuxi, SM8550), created from UniXNU's `examples/device` template. It builds with the
-fork [OddlyLabs/UniXNU](https://github.com/OddlyLabs/UniXNU) (branch `fuxi`), whose component catalog has
-`FuxiFtsTouch`.
+fork [OddlyLabs/UniXNU](https://github.com/OddlyLabs/UniXNU) (branch `fuxi`).
 
-主文档：[fuxi_touch_panel_porting.md](fuxi_touch_panel_porting.md)。各子系统的状态以 [porting.toml](porting.toml) 为准。
+主文档：[fuxi_touch_panel_porting.md](fuxi_touch_panel_porting.md)，下一步计划：[fuxi-bringup-plan.md](fuxi-bringup-plan.md)。
+各子系统的状态以 [porting.toml](porting.toml) 为准。
 
 ## 现状
 
 | 子系统 | 状态 |
 |---|---|
 | 触控（ST FTM5） | 驱动和分阶段探针已写好。2026-11-02 第 3 阶段上机通过：上电、时钟、引脚和 12 MHz SPI 都正常，复位后收到就绪事件，读到芯片 ID `36 40`。第 4 阶段通过：轮询和中断两种模式都读到了完整的点击（按下、移动、抬起和坐标），两根手指也能分别跟踪，8 个核都在运行时也正常。触控电源必须由探针投 RPMh 票，不投时控制器不应答。开中断的启动共 8 次，有 1 次在内核启动几秒后自己重启，原因还没查清。HID 层（`ShengHidInput`）已接入并上机验证：事件驱动挂在 sheng 默认的组合设备上，每组触点都作为 HID 报告送进系统（一次 68 组，全部成功） |
-| 固件和启动镜像 | CI 构建 DEBUG 固件和 `fastboot boot` 用的启动镜像，只上传加密版本。2026-11-02 上机：bootloader 接受镜像，固件、UniXNU 菜单和 DarwinBoot 正常，XNU 启动到 `bsd_init`。途中修了两处：缺 sheng 的 AMP 补丁（CPU 拓扑）；内核按树莓派的固定地址读写 panic 日志区（打开 `CONFIG_XNU_DT_PANIC_REGION`）。记录见 `evidence/2026-11-02-first-boot.md`。固件内存表已按 8 GB 和 12 GB 两台手机修正（uefi-fuxi `c5793bc2`），在这台 12 GB 手机上启动正常 |
-| 存储 | 还没有 UFS 驱动。2026-11-03 接入了 UniXNU 的 RAM 块设备（`RamBlock`）：引导器交来的内存盘作为块设备发布，APFS 可以挂上去，用来从内存启动 IPSW 里的恢复盘。2026-11-03 上机：恢复盘已作为根文件系统挂上，随后内核因为根卷没有密封签名而停下；加 `rd=md0-ramblock` 后通过：`launchd`、`restored_external` 都跑起来了，这是这台手机上第一次跑起 iOS 的用户态 |
-| CPU | 2026-11-02 上机：`sheng-smp=1 armcpu-spi-ipi=1` 时 7 个副核都经 PSCI 启动成功，调度器认到 8 个核；再加 `armcpu-self-ipi=1` 核间中断才通。两个小核（1、2 号）还没见到时钟中断。默认镜像已打开多核（含 `armcpu-self-ipi=1`）。2026-11-03：去掉 `armcpu-spi-ipi=1` 时核间中断送不到（SGI 在这台机器上不通）；9 次多核启动里有 1 次副核全都没起来，原因未知 |
-| 显示、存储、GPU、网络、音频、电源 | 计划中；显示和电源的硬件资料已整理 |
+| 固件和启动镜像 | CI 构建 DEBUG 固件和 `fastboot boot` 用的启动镜像，只上传加密版本。2026-11-02 上机：bootloader 接受镜像，固件、UniXNU 菜单和 DarwinBoot 正常，XNU 启动到 `bsd_init`。途中修了两处：缺 sheng 的 AMP 补丁（CPU 拓扑）；内核按树莓派的固定地址读写 panic 日志区（打开 `CONFIG_XNU_DT_PANIC_REGION`）。记录见 `evidence/2026-11-02-first-boot.md`。固件内存表已按 8 GB 和 12 GB 两台手机修正（uefi-fuxi `c5793bc2`） |
+| 存储（UFS） | **2026-11-14 打通到真机**。接入 ShengUfs 的 `NativeUfs`：接管 UFS 控制器、过 SMMU、读 GPT、校验根 manifest，从 `unixnu` 分区读出两个 IPSW 窗口并逐字节核对（`evidence/2026-11-14-ufs-gpt.md`、`-ufs-root-windows.md`）。分区从 userdata 尾部切出 32 GiB，Android 侧数据实测完好（`-dual-system-partition.md`） |
+| 存储根策略 | 用 `kits/VerifiedRoot` 给两个窗口签所有者策略。**策略是 header-only 的**：内核里只放 544 字节信封，每 4 KiB 块的 SHA-256 表放进根镜像的 `OS.vroot`、`SystemOS.vroot` 数据对象。原因是全量信封让 `boot.img` 涨到 203.6 MiB，而 fuxi 的 ABL 拒绝任何超过 `boot_a` 分区（192 MiB）的镜像；header-only 把它压回 138 MiB（`evidence/2026-11-14-header-only-policy.md`） |
+| RAM 块设备 | 2026-11-03 接入 `RamBlock`：引导器交来的内存盘作为块设备发布，APFS 可以挂上去，用来从内存启动 IPSW 里的恢复盘。加 `rd=md0-ramblock` 后 `launchd`、`restored_external` 都跑起来了，这是这台手机上第一次跑起 iOS 的用户态 |
+| CPU | 2026-11-02 上机：`sheng-smp=1 armcpu-spi-ipi=1` 时 7 个副核都经 PSCI 启动成功，调度器认到 8 个核；再加 `armcpu-self-ipi=1` 核间中断才通。两个小核（1、2 号）还没见到时钟中断。2026-11-03：去掉 `armcpu-spi-ipi=1` 时核间中断送不到（SGI 在这台机器上不通）；9 次多核启动里有 1 次副核全都没起来，原因未知 |
+| 显示、GPU、网络、音频、电源 | 计划中。面板、GPU 和保留内存的参数已从原厂设备树提取到 `facts/`；GPU 的 ZAP/SQE/GMU 固件已 pin 在 `scripts/data/fuxi-gpu-inputs.json` |
+
+### 存储线走到哪一步
+
+`native-ufs-probe=11` 与 `native-ufs-root=1` 是两回事，需要分清：
+
+- **probe 模式**（已多次上机）只做到「读到窗口并核对 SHA」，屏幕上的 `NATIVE_UFS root windows … manifest status=0`
+  就是它的报告。这条路不碰签名策略。
+- **root 模式**（2026-11-14 起）走 `configureVerification`：内核里的策略信封 → 从根镜像 `OS.vroot` 取哈希表 →
+  `vr_open` 验签 → `signedVolumeUuid()` 返回真 → 发布根卷。这是 `bsd_init` 能从 UFS 挂根的前提。
+
+真机已经确认的部分：`unixnu` 分区上的 manifest 是 version 2，四个条目全部正确
+
+```
+OS               off=0x100000     size=6077580800  blk=512   sha=e5634d04…
+SystemOS         off=0x16a600000  size=3303014400  blk=512   sha=b4908cde…
+OS.vroot         off=0x22f400000  size=  47481120  blk=4096  flags=3
+SystemOS.vroot   off=0x232200000  size=  25804800  blk=4096  flags=3
+```
+
+`flags=3` 是 data object，`readPolicyTable` 正是按这个名字和大小去找的。还没上机验证的是：策略验签是否通过、
+根卷能否发布。
 
 ## 相关仓库
 
@@ -34,17 +57,23 @@ UniXNU 自己提供启动菜单（UniXNUPkg）和 XNU 加载器（DarwinBoot）�
 
 | 路径 | 内容 |
 |---|---|
-| `board.toml`、`feeds.toml`、`configs/fuxi_defconfig` | 板子、组件、归档顺序、SoC 版本、内核配置 |
+| `board.toml`、`feeds.toml`、`configs/fuxi_defconfig` | 板子、组件、归档顺序、SoC 版本、内核配置；`[userdata]` 描述 `unixnu` 分区的窗口布局 |
 | `dts/fuxi.dts` | 设备树（包含 UniXNU-sm8550-common 的 `sm8550.dtsi`） |
 | `patches/xnu/` | `fuxi-touch-probe.patch`：`bsd_init` 调用触控探针 |
-| `package/` | 在构建树里是 `kits/fuxi`。`FuxiTouchProbe.cpp`（探针）、`FuxiTouchBoard.h`、`FuxiPanelBoard.h`（板级常量，每项注明来源）；`TouchBoard.h`、`QcomRpmh.*`、`SmmuBypass.h`、`ShengPlatformPower.cpp`（AMFI 需要的 PMGR 桥）原样取自 UniXNU-sheng |
+| `package/` | 在构建树里是 `kits/fuxi`。`FuxiTouchProbe.cpp`（探针）、`FuxiTouchBoard.h`、`FuxiPanelBoard.h`（板级常量，每项注明来源）；`FuxiRamBlockStore.cpp`（RAM 块的弱定义桩）；`TouchBoard.h`、`QcomRpmh.*`、`SmmuBypass.h`、`ShengPlatformPower.cpp`（AMFI 需要的 PMGR 桥）原样取自 UniXNU-sheng |
 | `scripts/build-fuxi-touch.py` | 用 XNU 构建的编译记录编译探针和驱动，打包成 `libFuxiTouch.a` |
+| `scripts/build-arm-driver.py` | 用同一份编译记录编译 catalog 里的 ARM 驱动（`NativeUfs` 走它）；对 NativeUfs 做三处设备侧覆盖，见文件开头 |
+| `scripts/build-fuxi-root-policy.py` | 给两个 IPSW 窗口签所有者策略，产出 544 字节信封和 `<窗口>.vroot` 哈希表；`--no-archive` 只做镜像侧产物 |
 | `scripts/build-fuxi-platform-power.py`、`ci/check-pmgr-bridge.py` | 编译 PMGR 桥（改自 sheng 的构建脚本，改动见文件开头）；CI 在链接后核对它和 AMFI 的约定 |
+| `scripts/build-fuxi-ram-block.py`、`ci/check-ram-block-bindings.py` | RAM 块设备及其绑定核对 |
+| `scripts/pull-fuxi-gpu-firmware.sh`、`scripts/squash-mdt.py`、`scripts/data/fuxi-gpu-inputs.json` | 从手机提取 Adreno 740 的 ZAP（`.mdt` + 分片合并）、SQE 和 GMU 固件，并把字节数和 SHA-256 固定下来；固件本身在 `.cache/`，不入库 |
+| `scripts/dual_sys-gpt-entry-growth.patch` | 把 fuxi 的 GPT 条目数 32 扩到 128（在已保留的 16 KiB 内） |
 | `drivers/FuxiFtsTouch` | 子模块，指向 FuxiFtsTouch |
 | `porting.toml` | 移植记录（UniXNU 格式） |
 | `tests/board_test.c` | 板级常量测试 |
 | `ci/boot-image-recipient.pem`、`ci/decrypt-boot-image.sh`、`ci/check-boot-image.py` | 启动镜像加密用的公钥、本地解密脚本，以及启动前核对镜像的脚本 |
-| `facts/` | 从官方设备树导出的触控、面板事实，以及 73 组面板 DSI 命令序列 |
+| `facts/` | 从官方设备树导出的触控、面板、GPU 和保留内存事实，以及 73 组面板 DSI 命令序列 |
+| `evidence/` | 每一条上机结论，按日期，写清命令和看到的东西 |
 
 本地另有 `dtb/`、`firmware/`、`power/`、`ref_src/` 四个目录，不进 Git（见 `.gitignore`）：官方 DTB 和触控固件是厂商文件；dmesg 里有使用痕迹；`ref_src/` 是 GPL 参考源码，只供查阅。
 
@@ -68,6 +97,9 @@ git clone -b fuxi https://github.com/OddlyLabs/uefi-fuxi
 ./unixnu defconfig fuxi_defconfig -D ../unixnu-fuxi
 ```
 ```bash
+./unixnu ipsw fetch OS "Cryptex1,SystemOS"      # 策略签名要读原始窗口
+```
+```bash
 ./unixnu build kernel
 ```
 ```bash
@@ -80,9 +112,22 @@ git clone -b fuxi https://github.com/OddlyLabs/uefi-fuxi
 ./unixnu bootimg --uefi ../uefi-fuxi --target DEBUG --dtb ../uefi-fuxi/Platforms/Xiaomi/fuxiPkg/FdtBlob/sm8550-xiaomi-fuxi.dtb
 ```
 
-`--unique-chip-id` 这里用的是固定的测试值。现在的镜像只跑到触控探针的 panic 报告，还用不到用户数据；以后要启动到系统时，再换成手机自己的值。
+`--unique-chip-id` 这里用的是固定的测试值。它只影响内核看到的板级身份，不影响启动；真正进用户态之前要换成手机自己的值。
 
 固件这一步不涉及苹果的文件，也可以在 Linux 上单独跑，适合只改固件时快速验证：除了 clang、lld 和 llvm 工具，BaseTools 还要 `uuid-dev`。2026-11-01 在 Ubuntu 26.04（WSL，clang 21.1.8）上用上面的 `defconfig` 和 `build firmware` 两条命令构建通过，固件卷 0x300000 字节。
+
+### 根镜像（`unixnu` 分区）
+
+分区里的镜像由 `./unixnu build userdata` 生成，携带两个 IPSW 窗口和两个哈希表对象：
+
+```bash
+./unixnu build userdata --device "$PWD/fuxi" \
+  --object "OS.vroot=build/verified-root-os/OS.vroot" \
+  --object "SystemOS.vroot=build/verified-root-systemos/SystemOS.vroot"
+```
+
+两个 `.vroot` 来自 `scripts/build-fuxi-root-policy.py`。它们必须和内核里的信封出自同一次签名，否则密钥、卷 UUID
+和哈希表会对不上。
 
 ## CI（GitHub Actions）
 
@@ -91,23 +136,50 @@ git clone -b fuxi https://github.com/OddlyLabs/uefi-fuxi
 | Host tests | Ubuntu | FuxiFtsTouch 测试（gcc/clang，ASan/UBSan）、板级常量测试、脚本语法 |
 | Kernel-target compile | macOS 26 + Xcode | 驱动的 C 代码按 arm64 内核代码编译，确认不调用 libc |
 | fuxi boot image | macOS 26 + Xcode | 编译内核（XNU 构建、归档、链接、prelink），确认触控探针在内核里、`bsd_init` 调用了它；然后构建 payload、固件和启动镜像，加密后上传 |
+| userdata image | macOS 26 + Xcode | 组装构建树、签两个窗口、把 `.vroot` 作为数据对象写进根镜像，加密后上传 |
 | Porting record | Ubuntu | 用 fork 里的 UniXNU 检查器验证 `porting.toml` |
 
-启动镜像里有苹果 kernelcache 的内容，所以只上传用 `ci/boot-image-recipient.pem` 加密过的版本，私钥只在机主自己的电脑上；其余产物只上传文本日志。
+启动镜像和根镜像里都有苹果的内容，所以只上传加密过的版本，私钥只在机主自己的电脑上；其余产物只上传文本日志。
+
+`ci/build.yml` 把 `unixnu/out/ipsw` 缓存起来（键 `ipsw-21H461-os-systemos-v1`）：策略签名要哈希两个窗口共 8 GiB，
+不缓存的话每次重建都要重新下载半小时。缓存只在构建成功后保存，坏下载不会变成后续信任的副本。
 
 ## 上机
 
 只用 `fastboot boot` 临时启动，不写任何分区。步骤：
 
 1. 下载 CI 的 `fuxi-boot-image-encrypted-*` 产物，用私钥解密：`bash ci/decrypt-boot-image.sh <私钥> <产物目录>`。
-2. 核对镜像：`python3 ci/check-boot-image.py <产物目录>/boot.img <产物目录>/boot.json ../uefi-fuxi`。它按 `board.toml` 和固件配置检查镜像头、加载偏移、固件卷、payload 里的文件、ADT 和启动参数，全部 `ok` 再继续。
+2. 核对镜像：`python3 ci/check-boot-image.py <产物目录>/boot.img <产物目录>/boot.json ../uefi-fuxi`。它按
+   `board.toml` 和固件配置检查镜像头、加载偏移、固件卷、payload 里的文件、ADT 和启动参数，全部 `ok` 再继续。
 3. 手机进入 fastboot，运行 `fastboot boot boot.img`。
-4. 默认启动参数是 `fuxi-touch=3 fuxi-touch-panic=1`：探针跑完第 3 阶段（上电、时钟、SPI、复位、读芯片 ID）后 panic，在 panic 屏上读 4 行 FTS 诊断，对照主文档第 7.2 节。
-5. 重启手机即回到原来的系统。
+4. 重启手机即回到原来的系统。
+
+### 镜像大小上限（重要）
+
+fuxi 的 ABL **不接受比 `boot_a` 分区更大的启动镜像**，即使 `fastboot boot` 只是把镜像投进内存。`boot_a` 是
+201,326,592 字节（192 MiB），超出的镜像会被这样拒绝：
+
+```
+Booting   FAILED (remote: 'Failed to load/authenticate boot image: Load Error')
+```
+
+而且被判失败的镜像会把 slot 标成不可启动，之后每次重启都回到 bootloader：
+
+```
+slot-unbootable:a:yes
+```
+
+一条命令就能救回来，不用重刷：
+
+```bash
+fastboot set_active a
+```
+
+这也是根策略必须做成 header-only 的原因：全量信封让镜像到 203.6 MiB，正好越界。
 
 ### 探针镜像：定位 XNU 早期卡在哪
 
-XNU 自己的控制台出来之前，能看到的只有屏幕顶部的色条：绿色是 DarwinBoot 交出控制权，蓝色是进入内核，品红是即将打开 MMU。再往后，就用会自动重启的“入口探针”来判断：探针放在某个位置，内核走到那里就等几秒然后重启手机。所以手机重启了，说明走到了那里；一直停在色条上，说明在那之前就卡住了。
+XNU 自己的控制台出来之前，能看到的只有屏幕顶部的色条：绿色是 DarwinBoot 交出控制权，蓝色是进入内核，品红是即将打开 MMU。再往后，就用会自动重启的"入口探针"来判断：探针放在某个位置，内核走到那里就等几秒然后重启手机。所以手机重启了，说明走到了那里；一直停在色条上，说明在那之前就卡住了。
 
 做法遵循 UniXNU 调试指南（Entry probe reset 一节）。内核由 CI 编译，payload 和启动镜像在本地生成，不需要 Mac：
 
@@ -125,6 +197,16 @@ XNU 自己的控制台出来之前，能看到的只有屏幕顶部的色条：�
 
    Linux 上需要 clang、lld、llvm 工具、`dtc` 和 `mtools`。
 5. `fastboot boot probe.img`。设了延时的探针镜像不需要拍照：手机自己重启回系统，就说明走到了探针的位置。
+
+### 大镜像写入分区
+
+`unixnu` 分区有 32 GiB，`fastboot flash` 会在 Windows 上因为 8.8 GiB 的缓冲直接
+`std::bad_alloc`，`adb shell` 又会因为 PTY 把二进制流写坏（`write EOF`）。可行的做法是用
+`adb exec-in` 直接喂给 `dd`，不经过 PTY：
+
+```bash
+adb exec-in "dd of=/dev/block/by-name/unixnu bs=8M conv=fsync" < userdata-root.img
+```
 
 ## 维护
 
