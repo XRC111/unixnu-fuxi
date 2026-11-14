@@ -104,7 +104,11 @@ windows = [
 ]
 [payload]
 volume = "FUXIESP"
-size_mib = 192
+# 320 MiB: the owner-signed VerifiedRoot archive puts the two windows' 4 KiB block hashes (~70 MB) on the
+# kernel link, so the payload outgrew the 192 MiB it needed for the unsigned kernel. This rides in the
+# boot image only (payload = "image"); boot_a itself is 192 MiB, so a flash boot of this image would not
+# fit until the policy moves to a header-only form with the tables in the root image.
+size_mib = 320
 loader = "firmware"
 title = "UniXNU"
 panic_screen = true
@@ -153,6 +157,7 @@ root_match_volume_uuid = "9071148B-B025-402D-AD7A-48464D8B5FFF"
 # The restore ramdisk travels packed (DBRDISK1, scripts/pack-data-ramdisk.py): 176 MiB dense does not fit the 192 MiB
 # payload volume next to the prelinked kernel, 131 MiB packed does.
 packed_data_ramdisk = true
+
 
 
 
