@@ -18,8 +18,11 @@ on:
 permissions:
   contents: read
 
+# One build at a time. The group must not include ${{ github.run_id }}: that makes every run its own
+# group, which is how two builds once pulled the 8 GiB IPSW windows at the same time. A new commit
+# cancels the run that is still going, the same way the userdata image workflow behaves.
 concurrency:
-  group: build-main-v2-${{ github.run_id }}
+  group: build-main-v2
   cancel-in-progress: true
 
 defaults:

@@ -16,8 +16,11 @@ on:
 permissions:
   contents: read
 
+# Same reasoning as build.yml: a fixed group so two image runs cannot overlap. It stays a separate
+# group from the build workflow because both want the same 8 GiB IPSW cache and one of them should
+# wait rather than interleave, and this workflow is started by hand so it is never auto-cancelled.
 concurrency:
-  group: userdata-${{ github.run_id }}
+  group: userdata-image
   cancel-in-progress: false
 
 defaults:
