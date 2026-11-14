@@ -183,6 +183,11 @@ def main() -> int:
         if not target.is_file() and source.is_file():
             target.symlink_to(source)
 
+    # build-verified-root-probe.py compiles with bsd_init's recorded flags, which carry
+    # -I build/xnu/ios-obj/EXPORT_HDRS/libsa; XNU only creates that directory for some targets, and
+    # clang treats a missing -I as an error under -Werror.
+    (ROOT / 'build/xnu/ios-obj/EXPORT_HDRS/libsa').mkdir(parents=True, exist_ok=True)
+
     result = subprocess.run([sys.executable, str(ROOT / 'scripts/build-verified-root-probe.py'),
                              '--component', 'os', '--include-systemos'], cwd=ROOT)
     if result.returncode:
