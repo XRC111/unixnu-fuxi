@@ -162,14 +162,22 @@ jobs:
         run: |
           # scripts/build-fuxi-root-policy.py signs the two windows the unixnu image carries; it reads the
           # unchanged IPSW disk images, so they have to be here before the kernel link pulls the archive in.
-          dir=$(ls -d out/ipsw/* 2>/dev/null | head -n 1)
-          if [ -n "$dir" ] && ls "$dir"/044-76040-038.dmg "$dir"/044-76034-038.dmg >/dev/null 2>&1; then
+          # `set -e` is active: an empty or failing glob inside an assignment would abort the step,
+          # so test with an if rather than letting a command fail.
+          dir=""
+          for candidate in out/ipsw/*; do
+            if [ -d "$candidate" ]; then dir="$candidate"; break; fi
+          done
+          if [ -n "$dir" ] && [ -f "$dir/044-76040-038.dmg" ] && [ -f "$dir/044-76034-038.dmg" ]; then
             echo "cache hit: $dir"
           else
             ./unixnu ipsw fetch OS "Cryptex1,SystemOS" --device "$GITHUB_WORKSPACE/fuxi"
-            dir=$(ls -d out/ipsw/* | head -n 1)
+            for candidate in out/ipsw/*; do
+              if [ -d "$candidate" ]; then dir="$candidate"; break; fi
+            done
           fi
-          [ -n "$dir" ] && ls -l "$dir"
+          [ -n "$dir" ] || { echo "::error::no IPSW directory under unixnu/out/ipsw"; exit 1; }
+          ls -l "$dir"
           echo "UNIXNU_IPSW_DIR=$PWD/$dir" >> "$GITHUB_ENV"
       - name: Build kernel
         working-directory: unixnu
@@ -319,7 +327,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Save the IPSW windows
-        if: always()
+        # Only after the kernel step proved the inputs were usable, and only on a cache miss, so a
+        # broken download never becomes the cached copy every later run trusts.
+        if: success()
         uses: actions/cache/save@v4
         with:
           path: unixnu/out/ipsw
