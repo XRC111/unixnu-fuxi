@@ -132,6 +132,17 @@ if component == 'NativeUfs':
     command += ['-I', str(ROOT / 'kits/VerifiedRoot/include'), '-I', str(ROOT / 'drivers/VirtioMmioBlock'),
                 '-DNATIVE_VERIFIED_BLOCK=1', '-DNATIVE_VERIFIED_BLOCK_MULTI_POLICY=1', '-mgeneral-regs-only',
                 '-Wno-sign-conversion']
+    # Device override (XRC111/unixnu-fuxi): this board roots from the dual-system partition
+    # "unixnu" carved from the end of userdata (evidence/2026-11-14-dual-system-partition.md),
+    # not from userdata itself. ShengUfs 99d8bcd hardcodes the name in RootLayout.h with no build
+    # switch (upstream main is the same), so substitute it in the throwaway build tree, which is
+    # what the aston port does with its vendored copy. Exact match: a reworded revision fails loudly.
+    layout = ROOT / 'drivers/ShengUfs/RootLayout.h'
+    layout_text = layout.read_text()
+    marker = 'static const char wanted[] = "userdata";'
+    if layout_text.count(marker) != 1:
+        raise SystemExit('RootLayout.h: the root partition name was not uniquely identified')
+    layout.write_text(layout_text.replace(marker, 'static const char wanted[] = "unixnu";'))
 if component=='NativeOfflineGPU':
     command += ['-I',str(ROOT/'drivers/VirtioMmioConsole')]
 if component in ('NativeLegacyDisplay','NativeHidInput'):
