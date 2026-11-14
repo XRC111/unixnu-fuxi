@@ -115,9 +115,9 @@ evidence = [  { kind = "device", command = "fastboot boot of the run 43574268395
 
 [[area]]
 id = "display"
-status = "in-progress"
+status = "host-verified"
 components = []
-paths = ["scripts/build-fuxi-display.py", "include/FuxiPanel*", "package/*Display*", "package/*Framebuffer*", "package/*Backlight*", "package/*Panel*", "scripts/*display*", "scripts/*gop*", "scripts/*framebuffer*", "facts/panel_*"]
+paths = ["include/FuxiPanel*", "package/*Display*", "package/*Framebuffer*", "package/*Backlight*", "package/*Panel*", "scripts/*display*", "scripts/*gop*", "scripts/*framebuffer*", "facts/panel_*", "facts/display_engine_facts.json", "scripts/build-fuxi-display.py"]
 inputs = ["Panel xiaomi m3 38 0c 0a (Samsung DDIC by its command set), 1080x2400, DSI0 command mode with DSC 8 bpp, slices 540x40, 1.1 GHz.", "Splash framebuffer 0xb8000000 (0x2b00000), 32 bpp, stride 1080 pixels, the same region as sheng."]
 configuration = ["package/FuxiPanelBoard.h holds the panel and controller constants with their sources; no display component is selected."]
 procedure = ["First stage: keep the firmware framebuffer (GopFramebuffer route), as sheng does."]
@@ -131,7 +131,7 @@ evidence = [
 
 [[area]]
 id = "input"
-status = "implemented"
+status = "host-verified"
 components = ["QcomGeniSpi", "FuxiFtsTouch"]
 paths = ["drivers/FuxiFtsTouch", "drivers/FuxiFtsTouch/**", "include/FuxiTouch*", "package/*Touch*", "scripts/*touch*", "facts/touch_*", "tests/**", "package/*Hid*", "scripts/*hid*"]
 inputs = ["Stock device tree (OS3.0.309 vendor_boot DTB[2] with dtbo[4], merged with fdtoverlay): /soc/qcom,qupv3_1_geni_se@ac0000/spi@a90000/fts@0, compatible st,spi, 12 MHz, SPI mode 0.", "Controller ST FingerTip FTM5, chip id 36 40, firmware 53.42 kept in its own flash (/proc/tp_fw_version on Android), tp-vendor 0x38.", "Bus QUP1 SE4 at 0xa90000, wrapper 0xac0000, SMMU stream 0xa3; pins 44-47 (qup1_se4); interrupt GPIO 25 (active low, TLMM summary SPI 208); reset GPIO 24.", "Rails vdd ldob12 1.8 V (RPMh 0x40900) and avdd ldom6 3.2 V (RPMh 0x41b00), measured with root on Android; their only consumer is spi0.0."]
