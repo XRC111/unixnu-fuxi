@@ -19,7 +19,7 @@ fork [OddlyLabs/UniXNU](https://github.com/OddlyLabs/UniXNU) (branch `fuxi`).
 | 存储根策略 | 用 `kits/VerifiedRoot` 给两个窗口签所有者策略。**策略是 header-only 的**：内核里只放 544 字节信封，每 4 KiB 块的 SHA-256 表放进根镜像的 `OS.vroot`、`SystemOS.vroot` 数据对象。原因是全量信封让 `boot.img` 涨到 203.6 MiB，而 fuxi 的 ABL 拒绝任何超过 `boot_a` 分区（192 MiB）的镜像；header-only 把它压回 138 MiB（`evidence/2026-11-14-header-only-policy.md`） |
 | RAM 块设备 | 2026-11-03 接入 `RamBlock`：引导器交来的内存盘作为块设备发布，APFS 可以挂上去，用来从内存启动 IPSW 里的恢复盘。加 `rd=md0-ramblock` 后 `launchd`、`restored_external` 都跑起来了，这是这台手机上第一次跑起 iOS 的用户态 |
 | CPU | 2026-11-02 上机：`sheng-smp=1 armcpu-spi-ipi=1` 时 7 个副核都经 PSCI 启动成功，调度器认到 8 个核；再加 `armcpu-self-ipi=1` 核间中断才通。两个小核（1、2 号）还没见到时钟中断。2026-11-03：去掉 `armcpu-spi-ipi=1` 时核间中断送不到（SGI 在这台机器上不通）；9 次多核启动里有 1 次副核全都没起来，原因未知 |
-| 显示、GPU、网络、音频、电源 | 计划中。面板、GPU 和保留内存的参数已从原厂设备树提取到 `facts/`；GPU 的 ZAP/SQE/GMU 固件已 pin 在 `scripts/data/fuxi-gpu-inputs.json` |
+| 显示 | 参数已全部提取并在运行中的系统上核对过，只读探针已写好（见下文「显示线」）。完整实现还差 `NativeLegacyDisplay` 的 prelink 候选 |
 
 ### 存储线走到哪一步
 
@@ -39,8 +39,63 @@ OS.vroot         off=0x22f400000  size=  47481120  blk=4096  flags=3
 SystemOS.vroot   off=0x232200000  size=  25804800  blk=4096  flags=3
 ```
 
-`flags=3` 是 data object，`readPolicyTable` 正是按这个名字和大小去找的。还没上机验证的是：策略验签是否通过、
-根卷能否发布。
+`flags=3` 是 data object，`readPolicyTable` 正是按这个名字和大小去找的。
+
+### 根卷挂上了，但 Apple 不认它的密封
+
+2026-11-14 第一次跑 root 模式，panic 屏上出现的是：
+
+```
+rootvp not authenticated after mounting @bsd_init.c:1107
+```
+
+**这一行本身就是进展**：它在 `vfs_mountroot()` 和 `VFS_ROOT()` 都成功之后才执行，所以 NativeUfs 已经发布了
+根卷，内核也解析并挂载了它。之前所有运行都停在「读窗口」这一层，从没走到根卷发布。
+
+失败点是下一句：
+
+```c
+int autherr = VNOP_IOCTL(rootvnode, FSIOC_KERNEL_ROOTAUTH, NULL, 0, vfs_context_kernel());
+if (autherr) {
+    panic("rootvp not authenticated after mounting");
+}
+```
+
+`FSIOC_KERNEL_ROOTAUTH` 问的是 APFS：这个卷是不是 Apple Image4 密封过的。我们的卷由所有者自己的
+VerifiedRoot 策略签名，所以 APFS 答「不是」。
+
+**试过但走不通的做法**：`bsd_rooted_ramdisk()` 只比较 `rd` 参数的前三个字符，所以 `rd=md0-ramblock`
+能跳过这段检查。但 `rd` 在 `IOKitBSDInit.cpp` 里还负责选根设备：`mdevlookup` 要求参数恰好三段
+（`rdBootVar[3] == 0`），而 `md0-ramblock` 不满足，于是退到 `IOBSDNameMatching("md0-ramblock")`，
+匹配不到任何设备，`waitForService` 会一直等下去。**用 `rd` 跳过检查会连挂载一起弄坏。**
+
+**实际采用的做法**：`patches/xnu/fuxi-owner-root-auth.patch` 把那个 `panic` 换成一行报告。这个改动只
+降低「Apple 是否认可密封」这一关，不改变「数据是否可信」：NativeUfs 在发布每个 4 KiB 块之前已经
+按所有者策略验过哈希，未经所有者签名的读取照样失败。补丁的注释里写着同样的理由。
+
+## 显示线
+
+面板和显示引擎的参数都已从原厂设备树提取，并在运行中的 Android 上核对过一遍
+（`facts/display_engine_facts.json`）：
+
+| 项 | 值 |
+|---|---|
+| 面板 | `qcom,mdss_dsi_m3_38_0c_0a_dsc_cmd`，屏身份码 `0bba0c4e` |
+| 分辨率 | 1080×2400，DSI command mode，DSC 8 bit/component 与 8 bit/pixel，slice 540×40 ×2 |
+| 帧率 | 60 / 90 / **120** Hz（运行中的系统实测 `1080x2400x{60,120,90}cmd`） |
+| DSI 时钟 | 1.1 GHz |
+| 背光 | `panel0-backlight`，max 4095（与 `qcom,mdss-dsi-bl-max-level` 一致） |
+| 密度 | 440 dpi，413.755 × 413.849 |
+| HDR | 类型 1-4，420 nits |
+| MDP | `0xae00000+0x84000`，IRQ 83；ctl0 `0x16000`、mixer0 `0x45000`、intf1 `0x36000`、vig0 `0x5000`、dsc `0x81000`、cdm `0x7a200` |
+| DSI | ctrl0 `0xae94000+0x1000`，phy0 `0xae95500`（common `0xae95000+0xa00`） |
+
+代码目前只有 `package/FuxiDisplayProbe.cpp`：一个**只读**探针，从 `PE_current_console` 取固件交过来的
+扫描输出，报告几何、stride、depth 和基址；`fuxi-display=2` 时再读固件留下的 DPU 管道状态。它由
+`patches/xnu/fuxi-display-probe.patch` 在 `bsd_init` 里调用，默认不发声。
+
+完整的显示契约（`NativeLegacyDisplay` 绑定到原始 MobileFramebuffer）还需要目标 OS 版本的 prelink 候选，
+这个移植暂时没有，所以先做不依赖它的那一半。
 
 ## 相关仓库
 
@@ -59,10 +114,12 @@ UniXNU 自己提供启动菜单（UniXNUPkg）和 XNU 加载器（DarwinBoot）�
 |---|---|
 | `board.toml`、`feeds.toml`、`configs/fuxi_defconfig` | 板子、组件、归档顺序、SoC 版本、内核配置；`[userdata]` 描述 `unixnu` 分区的窗口布局 |
 | `dts/fuxi.dts` | 设备树（包含 UniXNU-sm8550-common 的 `sm8550.dtsi`） |
-| `patches/xnu/` | `fuxi-touch-probe.patch`：`bsd_init` 调用触控探针 |
+| `patches/xnu/` | `fuxi-touch-probe.patch`（`bsd_init` 调用触控探针）、`fuxi-display-probe.patch`（调用显示探针）、`fuxi-owner-root-auth.patch`（根卷由所有者策略密封时继续启动，见「存储线」） |
 | `package/` | 在构建树里是 `kits/fuxi`。`FuxiTouchProbe.cpp`（探针）、`FuxiTouchBoard.h`、`FuxiPanelBoard.h`（板级常量，每项注明来源）；`FuxiRamBlockStore.cpp`（RAM 块的弱定义桩）；`TouchBoard.h`、`QcomRpmh.*`、`SmmuBypass.h`、`ShengPlatformPower.cpp`（AMFI 需要的 PMGR 桥）原样取自 UniXNU-sheng |
 | `scripts/build-fuxi-touch.py` | 用 XNU 构建的编译记录编译探针和驱动，打包成 `libFuxiTouch.a` |
 | `scripts/build-arm-driver.py` | 用同一份编译记录编译 catalog 里的 ARM 驱动（`NativeUfs` 走它）；对 NativeUfs 做三处设备侧覆盖，见文件开头 |
+| `scripts/build-fuxi-display.py` | 用同一份编译记录编译显示探针，打包成 `libFuxiDisplay.a` |
+| `package/FuxiDisplayProbe.cpp` | 只读显示探针：取固件交过来的扫描输出并报告几何，`fuxi-display=2` 时读 DPU 管道状态 |
 | `scripts/build-fuxi-root-policy.py` | 给两个 IPSW 窗口签所有者策略，产出 544 字节信封和 `<窗口>.vroot` 哈希表；`--no-archive` 只做镜像侧产物 |
 | `scripts/build-fuxi-platform-power.py`、`ci/check-pmgr-bridge.py` | 编译 PMGR 桥（改自 sheng 的构建脚本，改动见文件开头）；CI 在链接后核对它和 AMFI 的约定 |
 | `scripts/build-fuxi-ram-block.py`、`ci/check-ram-block-bindings.py` | RAM 块设备及其绑定核对 |
