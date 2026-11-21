@@ -84,19 +84,25 @@ bool exists(const char *path)
   return false;
 }
 
-// Name the volume the root actually came from. The two windows of the root image are a GPT disk and a
-// bare APFS container; which one answered decides where the dyld cache can possibly be, so the answer is
-// part of the report rather than an assumption.
+// Describe the volume the root came from. The two windows of the root image are a GPT disk and a bare
+// APFS container; which one answered decides where the dyld cache can possibly be, so the answer is part
+// of the report rather than an assumption. statfs64 carries the device name, the filesystem name and the
+// mount point, which is exactly the three facts wanted here.
 void reportMount(void)
 {
-  struct mount *mp = rootvnode->v_mount;
+  // struct mount and struct vnode are opaque in the headers a kext may include, so the volume is asked
+  // about through vnode_mount() and vfs_get_statfs64() instead of through members.
+  mount_t mp = vnode_mount(rootvnode);
   if (mp == nullptr) {
     IOLog("FuxiRoot: root vnode has no mount\n");
     return;
   }
-  IOLog("FuxiRoot: root from \"%s\" type \"%s\" on \"%s\" flags 0x%x\n",
-        mp->mnt_stat.f_mntfromname, mp->mnt_stat.f_fstypename, mp->mnt_stat.f_mntonname,
-        static_cast<unsigned>(mp->mnt_flag));
+  struct statfs64 sfs;
+  vfs_get_statfs64(mp, &sfs);
+  IOLog("FuxiRoot: root on \"%s\" from \"%s\" type \"%s\" blocks %llu free %llu\n",
+        sfs.f_mntonname, sfs.f_mntfromname, sfs.f_fstypename,
+        static_cast<unsigned long long>(sfs.f_blocks),
+        static_cast<unsigned long long>(sfs.f_bfree));
   IOLog("FuxiRoot: rootdevice \"%s\"\n", rootdevice);
 }
 
@@ -135,7 +141,6 @@ extern "C" void fuxi_root_check(void)
   // On a verbose boot the lines above are already gone from the panel by the time it stops, so the
   // summary is repeated as the panic reason, which stays put.
   if (mode >= 2) {
-    panic("fuxi-root-check: %u/%u paths present, root from %s", found, total,
-          rootvnode->v_mount ? rootvnode->v_mount->mnt_stat.f_mntfromname : "?");
+    panic("fuxi-root-check: %u/%u paths present, root device %s", found, total, rootdevice);
   }
 }
