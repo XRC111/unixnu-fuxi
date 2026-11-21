@@ -67,11 +67,11 @@ def make_with_hdiutil(raw: Path, size: int) -> str:
     if not shutil.which('hdiutil'):
         raise SystemExit('hdiutil not found; this is the macOS path, or pass --mkapfs on Linux')
 
-    # Step 1: an empty read/write UDIF image, no filesystem yet. Creating it with -fs in the same breath is
-    # what the first attempt did, and the resulting image would not attach afterwards.
+    # Step 1: an empty read/write UDIF image, no filesystem yet. -format already implies UDIF, and hdiutil
+    # refuses "-format and -type cannot both be specified", which is what the second attempt failed on.
     image = raw.with_suffix('.dmg')
-    run('hdiutil', 'create', '-size', f'{size // MIB}m', '-type', 'UDIF', '-format', 'UDRW',
-        '-layout', 'NONE', '-ov', str(image))
+    run('hdiutil', 'create', '-size', f'{size // MIB}m', '-format', 'UDRW', '-layout', 'NONE', '-ov',
+        str(image))
 
     # Step 2: attach it, write the APFS container onto it, detach. newfs_apfs is hdiutil's own formatter and
     # produces exactly what the kernel and mount_apfs expect.
