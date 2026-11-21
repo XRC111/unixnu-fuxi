@@ -119,6 +119,12 @@ extern "C" void fuxi_root_check(void)
   gRootCheckSteps = 1;
 
   if (!rootvnode) {
+    // Silence here was how the first placement of this call was wasted: it sat before vfs_mountroot(),
+    // printed one line into a verbose log, and the panel showed nothing about the root at all. Reporting
+    // it as a panic means a wrong call site is visible instead of looking like a probe that never ran.
+    if (mode >= 2) {
+      panic("fuxi-root-check: no rootvnode at the call site (called before vfs_mountroot?)");
+    }
     IOLog("FuxiRoot: no rootvnode yet\n");
     return;
   }

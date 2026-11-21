@@ -116,7 +116,7 @@ description: Library not loaded: /usr/lib/libSystem.B.dylib
 
 ### 下一个探针：把挂的是哪个卷印在屏幕上
 
-`package/FuxiRootCheck.cpp` 在 `bsd_init` 里、`set_rootvnode` 之后、第一次 exec 之前运行，用 `namei`
+`package/FuxiRootCheck.cpp` 在 `bsd_init` 里、`set_rootvnode` 之后、ROOTAUTH 检查之前运行，用 `namei`
 逐个查这十个路径：
 
 ```
@@ -129,6 +129,8 @@ description: Library not loaded: /usr/lib/libSystem.B.dylib
 
 每个路径报告存在与否（目录会标 `(dir)`），另外还打印**根卷自己的身份**——`rootvnode->v_mount` 的
 设备名、文件系统类型、挂载点，以及 `rootdevice`。「哪个窗口答的话」正是下一步决策所依赖的那个事实。
+
+调用点本身踩过一次坑：它最初和显示探针放在一起，而那一块在 `bsd_init` 开头（约第 697 行），`vfs_mountroot()` 在第 891 行、`set_rootvnode` 在第 924 行——那里的 `rootvnode` 还是 NULL，探针打一行日志就返回了，屏幕上什么都看不到，看起来像「探针没跑」。现在 `rootvnode` 为空时在 `fuxi-root-check=2` 下直接 panic，放错位置会响，而不是安静地消失。
 
 它只读、不改任何东西。启动参数 `fuxi-root-check=1` 打开报告；`fuxi-root-check=2` 在报告后 panic，
 因为 `-v` 启动时那几行会被后面的日志顶掉，panic 的文字才停在屏幕上。
