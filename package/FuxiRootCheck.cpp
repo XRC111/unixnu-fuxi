@@ -17,8 +17,12 @@
 // This probe reports the layout the kernel actually sees after root is mounted, so the mount that
 // comes next is chosen from observation. Read-only: it looks paths up and never writes.
 //
-// fuxi-root-check=1 logs the report; fuxi-root-check=2 also panics afterwards, because on a verbose
-// boot the report scrolls away before the panel stops and the panic text is what stays visible.
+// The panel keeps only the last screenful and a verbose boot writes plenty after this runs, so the
+// answer is packed into the panic line: one bit per probe path plus the volume's own identity. The
+// per-path lines still go to the serial log, where their length costs nothing.
+//
+// fuxi-root-check=1 logs the report; fuxi-root-check=2 also panics afterwards, because the panic text
+// is what stays on the panel.
 
 #include <pexpert/pexpert.h>
 #include <IOKit/IOLib.h>
@@ -31,8 +35,8 @@ extern "C" {
 // rootvnode is the mounted root vnode; bsd_init sets it before this probe runs.
 extern vnode_t rootvnode;
 
-// rootdevice is the block device name vfs_mountroot settled on, and the string bsd_init hands to
-// IOSecureBSDRoot. Printing it says which of the two windows became the root.
+// rootdevice is the block device name vfs_mountroot settled on. It is the short "disk1s1"-shaped name,
+// not the "X on Y" string, and printing it says which of the two windows became the root.
 extern char rootdevice[];
 
 // sys/namei.h declares namei and nameidone without C linkage. This file is compiled as C++, so those
@@ -48,6 +52,9 @@ namespace {
 
 // The paths that decide whether launchd can start. Each is checked with namei, the same lookup the loader
 // would do, so a miss here is a miss there.
+//
+// The order is the order of the bits in the packed report: bit (kProbeCount - 1 - index). A path may be
+// appended but not reordered without changing what an old report means.
 const char *const kProbes[] = {
   "/usr/lib/libSystem.B.dylib",
   "/usr/lib/dyld",
@@ -61,8 +68,12 @@ const char *const kProbes[] = {
   "/private/preboot",
 };
 
+constexpr uint32_t kProbeCount = sizeof(kProbes) / sizeof(kProbes[0]);
+static_assert(kProbeCount <= 32, "the packed report is one uint32");
+
 volatile uint32_t gRootCheckSteps;
 volatile uint32_t gRootCheckFound;
+volatile uint32_t gRootCheckBits;
 
 // Look a path up under the mounted root and report whether it resolved.
 bool exists(const char *path)
@@ -82,28 +93,6 @@ bool exists(const char *path)
   }
   IOLog("FuxiRoot: %-56s missing (error %d)\n", path, error);
   return false;
-}
-
-// Describe the volume the root came from. The two windows of the root image are a GPT disk and a bare
-// APFS container; which one answered decides where the dyld cache can possibly be, so the answer is part
-// of the report rather than an assumption. statfs64 carries the device name, the filesystem name and the
-// mount point, which is exactly the three facts wanted here.
-void reportMount(void)
-{
-  // struct mount and struct vnode are opaque in the headers a kext may include, so the volume is asked
-  // about through vnode_mount() and vfs_get_statfs64() instead of through members.
-  mount_t mp = vnode_mount(rootvnode);
-  if (mp == nullptr) {
-    IOLog("FuxiRoot: root vnode has no mount\n");
-    return;
-  }
-  struct statfs64 sfs;
-  vfs_get_statfs64(mp, &sfs);
-  IOLog("FuxiRoot: root on \"%s\" from \"%s\" type \"%s\" blocks %llu free %llu\n",
-        sfs.f_mntonname, sfs.f_mntfromname, sfs.f_fstypename,
-        static_cast<unsigned long long>(sfs.f_blocks),
-        static_cast<unsigned long long>(sfs.f_bfree));
-  IOLog("FuxiRoot: rootdevice \"%s\"\n", rootdevice);
 }
 
 } // namespace
@@ -130,23 +119,47 @@ extern "C" void fuxi_root_check(void)
   }
   gRootCheckSteps = 2;
 
-  reportMount();
+  // The volume's own identity first. struct mount and struct vnode are opaque to a kext, so the answer
+  // comes from vfs_get_statfs64() instead of from members; statfs64 carries the device name, the
+  // filesystem name and the mount point, which is exactly the three facts wanted here.
+  mount_t mp = vnode_mount(rootvnode);
+  struct statfs64 sfs;
+  bool haveStat = false;
+  if (mp != nullptr) {
+    vfs_get_statfs64(mp, &sfs);
+    haveStat = true;
+    IOLog("FuxiRoot: root on \"%s\" from \"%s\" type \"%s\" blocks %llu free %llu\n",
+          sfs.f_mntonname, sfs.f_mntfromname, sfs.f_fstypename,
+          static_cast<unsigned long long>(sfs.f_blocks),
+          static_cast<unsigned long long>(sfs.f_bfree));
+  } else {
+    IOLog("FuxiRoot: root vnode has no mount\n");
+  }
+  IOLog("FuxiRoot: rootdevice \"%s\"\n", rootdevice);
 
+  uint32_t bits = 0;
   uint32_t found = 0;
-  for (const char *path : kProbes) {
-    if (exists(path)) {
+  for (uint32_t i = 0; i < kProbeCount; ++i) {
+    if (exists(kProbes[i])) {
       ++found;
+      bits |= 1u << (kProbeCount - 1 - i);
     }
   }
   gRootCheckFound = found;
+  gRootCheckBits = bits;
   gRootCheckSteps = 3;
 
-  const uint32_t total = static_cast<uint32_t>(sizeof(kProbes) / sizeof(kProbes[0]));
-  IOLog("FuxiRoot: %u of %u probe paths present\n", found, total);
+  IOLog("FuxiRoot: %u of %u probe paths present, packed 0x%x\n", found, kProbeCount, bits);
 
-  // On a verbose boot the lines above are already gone from the panel by the time it stops, so the
-  // summary is repeated as the panic reason, which stays put.
+  // The panel keeps only the last screenful, so the answer goes into the panic line: the count, the bit
+  // vector (bit 9 is kProbes[0]) and the volume that answered. Everything after this is launchd's own
+  // output, which is where the lines above would otherwise be lost.
   if (mode >= 2) {
-    panic("fuxi-root-check: %u/%u paths present, root device %s", found, total, rootdevice);
+    if (haveStat) {
+      panic("fuxi-root-check: %u/%u bits 0x%x, root %s on %s", found, kProbeCount, bits,
+            sfs.f_fstypename, sfs.f_mntfromname);
+    } else {
+      panic("fuxi-root-check: %u/%u bits 0x%x, root device %s", found, kProbeCount, bits, rootdevice);
+    }
   }
 }
