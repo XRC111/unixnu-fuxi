@@ -145,7 +145,7 @@ panic_screen = true
 # rooted-ramdisk marker, so bsd_init skips the sealed root check and still walks to the volume root_match_volume_uuid names
 # (bsd_init.c; evidence/2026-11-02-first-boot.md, image r3-ramblock).
 kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "sheng-pmgr=2", "sheng-smp=1", "armcpu-spi-ipi=1",
-               "armcpu-self-ipi=1", "native-ufs-root=1", "fuxi-display=1",
+               "armcpu-self-ipi=1", "native-ufs-probe=12", "fuxi-display=1",
                "fuxi-display-base=0xb8000000", "fuxi-display-size=0x2b00000",
                "fuxi-root-check=2"]
 # The trust cache the payload carries as kernel.macho.trustcache. DarwinBoot's ValidTrustCaches

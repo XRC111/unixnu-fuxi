@@ -75,8 +75,10 @@ volatile uint32_t gRootCheckSteps;
 volatile uint32_t gRootCheckFound;
 volatile uint32_t gRootCheckBits;
 
-// Look a path up under the mounted root and report whether it resolved.
-bool exists(const char *path)
+// Look a path up under the mounted root. Returns 0 when it resolved (and fills vpp when asked), or the
+// lookup's errno: ENOENT says the entry is absent, while EACCES or EIO would say the volume has it but the
+// lookup was refused, which is a different problem.
+int lookup(const char *path, vnode_t *vpp)
 {
   struct nameidata nd;
   NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE, CAST_USER_ADDR_T(path),
@@ -84,15 +86,16 @@ bool exists(const char *path)
   const int error = fuxi_namei(&nd);
   if (error == 0) {
     vnode_t vp = nd.ni_vp;
-    // A directory is worth telling apart from a file: the cache directory has to be a directory.
-    const int isdir = vnode_isdir(vp);
-    IOLog("FuxiRoot: %-56s exists%s\n", path, isdir ? " (dir)" : "");
-    vnode_put(vp);
+    if (vpp != nullptr) {
+      *vpp = vp;
+    } else {
+      vnode_put(vp);
+    }
     fuxi_nameidone(&nd);
-    return true;
+    return 0;
   }
   IOLog("FuxiRoot: %-56s missing (error %d)\n", path, error);
-  return false;
+  return error;
 }
 
 } // namespace
@@ -139,27 +142,40 @@ extern "C" void fuxi_root_check(void)
 
   uint32_t bits = 0;
   uint32_t found = 0;
+  uint32_t errors = 0;   // four bits per missing path: the low nibble is the first one that missed
+  uint32_t errorCount = 0;
   for (uint32_t i = 0; i < kProbeCount; ++i) {
-    if (exists(kProbes[i])) {
+    const int error = lookup(kProbes[i], nullptr);
+    if (error == 0) {
       ++found;
       bits |= 1u << (kProbeCount - 1 - i);
+    } else {
+      // ENOENT (2) says the entry is absent; anything else says the volume has it but refused the lookup,
+      // which is a different problem with a different fix. Four bits per error is enough for the errnos
+      // that can appear here, and six of them fit in the panic line.
+      errors |= static_cast<uint32_t>(error & 0xf) << (4 * errorCount);
+      if (errorCount < 6) {
+        ++errorCount;
+      }
     }
   }
   gRootCheckFound = found;
   gRootCheckBits = bits;
   gRootCheckSteps = 3;
 
-  IOLog("FuxiRoot: %u of %u probe paths present, packed 0x%x\n", found, kProbeCount, bits);
+  IOLog("FuxiRoot: %u of %u probe paths present, packed 0x%x, errors 0x%x\n", found, kProbeCount, bits,
+        errors);
 
   // The panel keeps only the last screenful, so the answer goes into the panic line: the count, the bit
-  // vector (bit 9 is kProbes[0]) and the volume that answered. Everything after this is launchd's own
-  // output, which is where the lines above would otherwise be lost.
+  // vector (bit 9 is kProbes[0]) and the errno nibbles for the paths that missed. Everything after this is
+  // launchd's own output, which is where the lines above would otherwise be lost.
   if (mode >= 2) {
     if (haveStat) {
-      panic("fuxi-root-check: %u/%u bits 0x%x, root %s on %s", found, kProbeCount, bits,
-            sfs.f_fstypename, sfs.f_mntfromname);
+      panic("fuxi-root-check: %u/%u bits 0x%x err 0x%x, root %s on %s", found, kProbeCount, bits,
+            errors, sfs.f_fstypename, sfs.f_mntfromname);
     } else {
-      panic("fuxi-root-check: %u/%u bits 0x%x, root device %s", found, kProbeCount, bits, rootdevice);
+      panic("fuxi-root-check: %u/%u bits 0x%x err 0x%x, root device %s", found, kProbeCount, bits,
+            errors, rootdevice);
     }
   }
 }
