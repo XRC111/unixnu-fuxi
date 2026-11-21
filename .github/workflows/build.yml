@@ -261,6 +261,21 @@ jobs:
             "$RUNNER_TEMP/kernel.macho.trustcache" --report "$RUNNER_TEMP/kernel.macho.trustcache.json"
           echo "UNIXNU_TRUST_CACHE=$RUNNER_TEMP/kernel.macho.trustcache" >> "$GITHUB_ENV"
           echo "UNIXNU_DATA_RAMDISK=$RUNNER_TEMP/restore-ramdisk.dbr" >> "$GITHUB_ENV"
+      - name: Make the Data seed
+        working-directory: unixnu
+        run: |
+          # Data is the writable volume the kernel mounts for launchd, not the restore ramdisk (that one
+          # only gives the RAM block a disk). It must be an APFS container, so this formats a fresh one on
+          # this Mac and packs it into the DBRDISK1 form DarwinBoot expands.
+          #
+          # The size comes from the partition arithmetic, not a constant: the unixnu window is 32 GiB and
+          # has to hold the 8.81 GiB root image, the store header and bitmap, a 1024-block guard and the
+          # 1 GiB log reserve, which leaves 6.19 GiB. 5 GiB keeps a margin; the kernel refuses a seed whose
+          # store window would not fit, and a refused seed publishes no Data volume at all.
+          python3 "$GITHUB_WORKSPACE/fuxi/scripts/make-data-seed.py" --gib 5 \
+            --output "$RUNNER_TEMP/data-seed.dbr" --report "$RUNNER_TEMP/data-seed.json"
+          cat "$RUNNER_TEMP/data-seed.json"
+          echo "UNIXNU_DATA_RAMDISK=$RUNNER_TEMP/data-seed.dbr" >> "$GITHUB_ENV"
       - name: Build payload
         working-directory: unixnu
         run: |
