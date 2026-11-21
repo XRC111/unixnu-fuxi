@@ -112,7 +112,40 @@ description: Library not loaded: /usr/lib/libSystem.B.dylib
   `.dyldlinkedit`、`.symbols` 全在那儿，`libSystem.B.dylib` 在里面出现 3345 次（OS 窗口只有 4 次）。
 - 所以那句 `(no such file, no dyld cache)` 说的是实话——**对这个已挂载的卷而言，两个断言都成立**。
 
-修法因此不是改加载器路径，而是**把第二个卷挂上**。
+修法因此不是改加载器路径，而是**把 Data 卷挂上**。
+
+### 参照仓库给出的答案
+
+同一个镜像、同一块板子，[Kerfand/UniXNU-Fuxi-Arm64e-iOS17](https://github.com/Kerfand/UniXNU-Fuxi-Arm64e-iOS17)
+已经开到桌面了（触摸、按键、声音、存储、串口、电池、壁纸、键盘、Wi-Fi、快充都可用；Safari、GPU、
+蓝牙、基带部分可用）。它的 `board.toml` 和这份几乎逐字相同：
+
+- `root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"` —— **完全一样**
+- `windows = [OS, Cryptex1,SystemOS]` —— 一样
+- `ipad_identity = true`（目标同样是 iPad7,1 的 iPadOS 17.7.11）—— 一样
+
+差别只在这几项：
+
+| 项 | 这份仓库 | 参照仓库 |
+|---|---|---|
+| `[payload.adt] persistent_data` | 无 | `true` |
+| `[payload.adt] ipad_identity` | 无 | `true` |
+| 启动参数 | `native-ufs-root=1` | `-apfs_shared_datavolume`、`offline-apfs-load=1`、`sheng-data-persist=2` |
+
+按 [UniXNU 的启动参数表](https://github.com/UniXNU/UniXNU/blob/main/docs/zh/xnu/boot-arguments.md)：
+
+```
+-apfs_shared_datavolume    使用 APFS 共享 Data 卷
+offline-apfs-load=1        在离线检查点加载 APFS
+data-persist=<n>           1 只验证 Data store 窗口，2 打开写窗口
+```
+
+**在 iPadOS 上 System 卷和 Data 卷是同一个 APFS 容器。** 打开共享 Data 卷时，System 卷连它的
+dyld 缓存一起就位——不需要单独把 SystemOS 窗口 graft 上去。探针结果（`Cryptexes` 在、
+`Cryptexes/OS` 不在）正好符合这个判断：缺的是容器的 Data 那一半，不是缺一次 cryptex 挂载。
+
+参照仓库的 `board.toml` 还记了一条有用的：**320 MiB 的低位窗口确实能进 launchd，但只剩约 32 MiB
+空闲，之后 jetsam 一直杀 SpringBoard 和 powerd**，所以它改用 `owned_memory_size = 0x130000000`。
 
 ### 下一个探针：把挂的是哪个卷印在屏幕上
 
@@ -135,7 +168,7 @@ description: Library not loaded: /usr/lib/libSystem.B.dylib
 它只读、不改任何东西。启动参数 `fuxi-root-check=1` 打开报告；`fuxi-root-check=2` 在报告后 panic，
 因为 `-v` 启动时那几行会被后面的日志顶掉，panic 的文字才停在屏幕上。
 
-### 挂第二个卷要过什么
+### 为什么不用苹果自己的 cryptex 挂载
 
 XNU 自己做第二次挂载的入口是 `bsd/vfs/vfs_syscalls.c` 里的 `kernel_mount()` / `mount_common()`；
 用户态的 `mount` 系统调用只是同一函数的薄封装。公开的 `vfs_mount_at_path()` 只放行 `lifs` 和 `nfs`，
@@ -155,9 +188,14 @@ typedef struct secure_boot_cryptex_args {
 ```
 
 载荷是已经打开的 fd，不是设备路径；认证类型（`CRYPTEX1_AUTH_ENV_GENERIC`、`CRYPTEX_AUTH_PDI_NONCE` …）
-在开源树里**只有 `bsd/sys/mount.h` 的声明**，实现跟着 APFS 组件走，不在 XNU 里。所以「内核里找个现成
-函数传个路径过去」这条路不存在——第二个卷必须先成为一个 APFS 组件认得的块设备，这是另一个问题，
-下一步从那里开始。
+在开源树里**只有 `bsd/sys/mount.h` 的声明**，实现跟着 APFS 组件走，不在 XNU 里。
+
+还有两个更硬的条件（`bsd/vfs/vfs_syscalls.c` 的 `graftdmg()` 与 `graft_secureboot_cryptex()`）：
+调用者要有 `com.apple.private.vfs.graftdmg` entitlement，我们的 launchd 没有；
+而且 `cryptex_vp->v_mount` 必须等于 `mounton_vp->v_mount`，跨卷直接返回 `EXDEV`；
+真正的校验是 `VNOP_IOCTL(cryptex_vp, FSIOC_GRAFT_FS)` 交给 APFS 做的。
+
+所以这条路不走。走的是上一节那条：让 APFS 打开**共享 Data 卷**，System 卷和 dyld 缓存是它的另一半。
 
 ## 显示线
 
