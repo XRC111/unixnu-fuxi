@@ -26,6 +26,11 @@
 // exported by the headers this file includes, so name it here rather than reach into a private header.
 extern "C" {
 extern vnode_t rootvnode;
+// namei and nameidone are C symbols in the kernel; declaring them inside extern "C" keeps their
+// link names as _namei and _nameidone instead of the C++ mangled namei(nameidata*) the compiler
+// would otherwise emit.
+int namei(struct nameidata *ndp);
+void nameidone(struct nameidata *ndp);
 }
 namespace {
 
