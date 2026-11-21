@@ -22,15 +22,19 @@
 #include <sys/namei.h>
 #include <sys/vfs_context.h>
 
-// rootvnode is the mounted root vnode; bsd_init sets it before this probe runs. Its declaration is not
-// exported by the headers this file includes, so name it here rather than reach into a private header.
 extern "C" {
-// rootvnode is the mounted root vnode, set by bsd_init before this probe runs; its declaration is not
-// reachable from the headers this file includes.
+// rootvnode is the mounted root vnode; bsd_init sets it before this probe runs.
 extern vnode_t rootvnode;
+
+// sys/namei.h declares namei and nameidone without C linkage. This file is compiled as C++, so those
+// declarations produce the mangled names namei(nameidata*) and nameidone(nameidata*), which nothing
+// defines; the linker answers "found _namei in vfs_lookup.o, declaration possibly missing extern C".
+// Redeclaring them as C functions collides with the header, so the two entry points are named by asm
+// label instead: the compiler emits the plain symbol whatever the header said.
+int fuxi_namei(struct nameidata *ndp) __asm("_namei");
+void fuxi_nameidone(struct nameidata *ndp) __asm("_nameidone");
 }
-// namei and nameidone are already declared with C linkage in <sys/namei.h>, included above;
-// redeclaring them here caused a language-linkage conflict and an ambiguous call.
+
 namespace {
 
 // The paths that decide whether launchd can start. Each is checked with namei, the same lookup the loader
@@ -57,14 +61,14 @@ bool exists(const char *path)
   struct nameidata nd;
   NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE, CAST_USER_ADDR_T(path),
          vfs_context_kernel());
-  const int error = namei(&nd);
+  const int error = fuxi_namei(&nd);
   if (error == 0) {
     vnode_t vp = nd.ni_vp;
     // A directory is worth telling apart from a file: the cache directory has to be a directory.
     const int isdir = vnode_isdir(vp);
     IOLog("FuxiRoot: %-56s exists%s\n", path, isdir ? " (dir)" : "");
     vnode_put(vp);
-    nameidone(&nd);
+    fuxi_nameidone(&nd);
     return true;
   }
   IOLog("FuxiRoot: %-56s missing (error %d)\n", path, error);
