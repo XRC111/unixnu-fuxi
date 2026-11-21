@@ -25,13 +25,12 @@
 // rootvnode is the mounted root vnode; bsd_init sets it before this probe runs. Its declaration is not
 // exported by the headers this file includes, so name it here rather than reach into a private header.
 extern "C" {
+// rootvnode is the mounted root vnode, set by bsd_init before this probe runs; its declaration is not
+// reachable from the headers this file includes.
 extern vnode_t rootvnode;
-// namei and nameidone are C symbols in the kernel; declaring them inside extern "C" keeps their
-// link names as _namei and _nameidone instead of the C++ mangled namei(nameidata*) the compiler
-// would otherwise emit.
-int namei(struct nameidata *ndp);
-void nameidone(struct nameidata *ndp);
 }
+// namei and nameidone are already declared with C linkage in <sys/namei.h>, included above;
+// redeclaring them here caused a language-linkage conflict and an ambiguous call.
 namespace {
 
 // The paths that decide whether launchd can start. Each is checked with namei, the same lookup the loader
