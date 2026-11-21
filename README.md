@@ -80,7 +80,7 @@ VerifiedRoot 策略签名，所以 APFS 答「不是」。
 
 ### launchd 跑起来了
 
-越过密封检查之后，2026-11-14 的启动到了这里：
+越过密封检查之后，2026-11-14 的启动到了这里；2026-11-21 换了一版带根卷探针的内核再启动一次（run 44886794079，`15bdc0b`），屏幕上的文字逐字相同：
 
 ```
 initproc failed to start -- exit reason namespace 6 subcode 0x1
@@ -92,31 +92,70 @@ description: Library not loaded: /usr/lib/libSystem.B.dylib
 **这是这台手机上第一次从 UFS 根启动用户态进程。** `launchd` 真的被 exec 了，卡在加载
 `libSystem.B.dylib`。
 
-问题在于那个库在 iOS/iPadOS 上**本来就不是文件**：它在 dyld 共享缓存里，而缓存又可能来自另一个卷。
-iPadOS 17 的布局大致是：
+问题在于那个库在 iOS/iPadOS 上**本来就不是文件**：它在 dyld 共享缓存里，而那个缓存不在挂上的卷里。
+
+### 把根镜像拆开看，答案是确定的
+
+2026-11-21 不再靠猜：根镜像 `userdata-root.img`（sha256 `f7c29dc9…`）的两个窗口在本机逐字节读过。
+证据见 `evidence/2026-11-21-root-image-dissected.md`。
+
+| 窗口 | 起点 | 结构 | `dyld_shared_cache` 出现次数 |
+|---|---|---|---|
+| `OS` | `0x100000` | `EFI PART` 保护性 MBR + GPT（128 项 × 128 字节），一个 APFS 分区在 LBA 34..11870241 | **0** |
+| `SystemOS` | `0x16a600000` | 裸 APFS 容器（`NXSB`，806400 块 × 4096 = 3.08 GiB） | **253** |
+
+也就是说：
+
+- 挂上去的 OS 窗口是个 **GPT 磁盘**，不是 APFS 容器；根卷在它的分区里，所以 `vfs_mountroot` 能挂上、
+  `/sbin/launchd` 能解析——这两件事本来就成立。
+- dyld 共享缓存整个在 **SystemOS** 窗口里：`dyld_shared_cache_arm64.01` … `.52`、`.dylddata`、
+  `.dyldlinkedit`、`.symbols` 全在那儿，`libSystem.B.dylib` 在里面出现 3345 次（OS 窗口只有 4 次）。
+- 所以那句 `(no such file, no dyld cache)` 说的是实话——**对这个已挂载的卷而言，两个断言都成立**。
+
+修法因此不是改加载器路径，而是**把第二个卷挂上**。
+
+### 下一个探针：把挂的是哪个卷印在屏幕上
+
+`package/FuxiRootCheck.cpp` 在 `bsd_init` 里、`set_rootvnode` 之后、第一次 exec 之前运行，用 `namei`
+逐个查这十个路径：
 
 ```
-OS 卷    → /System/Library/Caches/com.apple.dyld/
-SystemOS → /System/Cryptexes/OS/…
-```
-
-我们只发布了 OS 和 SystemOS 两个窗口，`/System/Cryptexes/OS` 还没挂载。
-
-### 下一个探针：先看，再决定挂什么
-
-与其猜该挂哪个卷，不如让内核把看到的说出来。`package/FuxiRootCheck.cpp` 在 `bsd_init` 里、显示探针
-之后、文件系统起来之前，用 `namei` 逐个查这些路径：
-
-```
-/usr/lib/libSystem.B.dylib          /System/Cryptexes
-/usr/lib/dyld                       /System/Cryptexes/OS
+/usr/lib/libSystem.B.dylib           /System/Cryptexes
+/usr/lib/dyld                        /System/Cryptexes/OS
 /System/Library/Caches/com.apple.dyld   /System/Cryptexes/App
-/System/Library/dyld                /sbin/launchd
-/private/var                        /private/preboot
+/System/Library/dyld                 /sbin/launchd
+/private/var                         /private/preboot
 ```
 
-每个路径报告存在与否（目录会标 `(dir)`），最后给一行汇总。它只读、不改任何东西，由启动参数
-`fuxi-root-check=1` 打开。有了这份清单，下一步该挂哪个卷就是从观测得出的，而不是试出来的。
+每个路径报告存在与否（目录会标 `(dir)`），另外还打印**根卷自己的身份**——`rootvnode->v_mount` 的
+设备名、文件系统类型、挂载点，以及 `rootdevice`。「哪个窗口答的话」正是下一步决策所依赖的那个事实。
+
+它只读、不改任何东西。启动参数 `fuxi-root-check=1` 打开报告；`fuxi-root-check=2` 在报告后 panic，
+因为 `-v` 启动时那几行会被后面的日志顶掉，panic 的文字才停在屏幕上。
+
+### 挂第二个卷要过什么
+
+XNU 自己做第二次挂载的入口是 `bsd/vfs/vfs_syscalls.c` 里的 `kernel_mount()` / `mount_common()`；
+用户态的 `mount` 系统调用只是同一函数的薄封装。公开的 `vfs_mount_at_path()` 只放行 `lifs` 和 `nfs`，
+所以 cryptex 挂载得直接调 `kernel_mount`。
+
+但苹果给 cryptex 的形态（`bsd/sys/_types/_graftdmg_un.h`）是**按文件描述符**交接的：
+
+```c
+typedef struct secure_boot_cryptex_args {
+    u_int32_t sbc_version;
+    u_int32_t sbc_4cc;
+    int sbc_authentic_manifest_fd;
+    int sbc_user_manifest_fd;
+    int sbc_payload_fd;
+    u_int64_t sbc_flags;
+} secure_boot_cryptex_args_t;
+```
+
+载荷是已经打开的 fd，不是设备路径；认证类型（`CRYPTEX1_AUTH_ENV_GENERIC`、`CRYPTEX_AUTH_PDI_NONCE` …）
+在开源树里**只有 `bsd/sys/mount.h` 的声明**，实现跟着 APFS 组件走，不在 XNU 里。所以「内核里找个现成
+函数传个路径过去」这条路不存在——第二个卷必须先成为一个 APFS 组件认得的块设备，这是另一个问题，
+下一步从那里开始。
 
 ## 显示线
 

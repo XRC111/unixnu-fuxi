@@ -8,23 +8,32 @@
 //   Library not loaded: /usr/lib/libSystem.B.dylib
 //   Reason: tried: '/usr/lib/libSystem.B.dylib' (no such file, no dyld cache)
 //
-// On iPadOS 17 that library is not a file on the root volume: it lives in the dyld shared cache, and the
-// system volume is only half of the story, because /System/Cryptexes/OS is a separate volume that has to
-// be mounted before launchd can resolve anything. This probe answers, from inside the kernel, which of
-// those paths exist after root is mounted, so the next step is chosen from observation rather than from a
-// guess about the layout.
+// Reading the shipped root image offline settled why. The OS window is a GPT disk whose single APFS
+// partition holds launchd and no dyld cache at all; the dyld shared cache (dyld_shared_cache_arm64.01
+// through .52, .dylddata, .dyldlinkedit, .symbols) lives in the SystemOS window, which is a bare APFS
+// container and is not mounted anywhere. So the loader is told "no such file, no dyld cache" because
+// both statements are true of the volume that is mounted.
 //
-// Read-only: it looks paths up and never writes. Silent unless fuxi-root-check is set.
+// This probe reports the layout the kernel actually sees after root is mounted, so the mount that
+// comes next is chosen from observation. Read-only: it looks paths up and never writes.
+//
+// fuxi-root-check=1 logs the report; fuxi-root-check=2 also panics afterwards, because on a verbose
+// boot the report scrolls away before the panel stops and the panic text is what stays visible.
 
 #include <pexpert/pexpert.h>
 #include <IOKit/IOLib.h>
 #include <sys/vnode.h>
 #include <sys/namei.h>
+#include <sys/mount.h>
 #include <sys/vfs_context.h>
 
 extern "C" {
 // rootvnode is the mounted root vnode; bsd_init sets it before this probe runs.
 extern vnode_t rootvnode;
+
+// rootdevice is the block device name vfs_mountroot settled on, and the string bsd_init hands to
+// IOSecureBSDRoot. Printing it says which of the two windows became the root.
+extern char rootdevice[];
 
 // sys/namei.h declares namei and nameidone without C linkage. This file is compiled as C++, so those
 // declarations produce the mangled names namei(nameidata*) and nameidone(nameidata*), which nothing
@@ -75,6 +84,22 @@ bool exists(const char *path)
   return false;
 }
 
+// Name the volume the root actually came from. The two windows of the root image are a GPT disk and a
+// bare APFS container; which one answered decides where the dyld cache can possibly be, so the answer is
+// part of the report rather than an assumption.
+void reportMount(void)
+{
+  struct mount *mp = rootvnode->v_mount;
+  if (mp == nullptr) {
+    IOLog("FuxiRoot: root vnode has no mount\n");
+    return;
+  }
+  IOLog("FuxiRoot: root from \"%s\" type \"%s\" on \"%s\" flags 0x%x\n",
+        mp->mnt_stat.f_mntfromname, mp->mnt_stat.f_fstypename, mp->mnt_stat.f_mntonname,
+        static_cast<unsigned>(mp->mnt_flag));
+  IOLog("FuxiRoot: rootdevice \"%s\"\n", rootdevice);
+}
+
 } // namespace
 
 // Report the root layout the kernel actually sees. Called from bsd_init after the root vnode is set and
@@ -93,6 +118,8 @@ extern "C" void fuxi_root_check(void)
   }
   gRootCheckSteps = 2;
 
+  reportMount();
+
   uint32_t found = 0;
   for (const char *path : kProbes) {
     if (exists(path)) {
@@ -100,8 +127,15 @@ extern "C" void fuxi_root_check(void)
     }
   }
   gRootCheckFound = found;
-
-  IOLog("FuxiRoot: %u of %u probe paths present\n",
-        found, static_cast<uint32_t>(sizeof(kProbes) / sizeof(kProbes[0])));
   gRootCheckSteps = 3;
+
+  const uint32_t total = static_cast<uint32_t>(sizeof(kProbes) / sizeof(kProbes[0]));
+  IOLog("FuxiRoot: %u of %u probe paths present\n", found, total);
+
+  // On a verbose boot the lines above are already gone from the panel by the time it stops, so the
+  // summary is repeated as the panic reason, which stays put.
+  if (mode >= 2) {
+    panic("fuxi-root-check: %u/%u paths present, root from %s", found, total,
+          rootvnode->v_mount ? rootvnode->v_mount->mnt_stat.f_mntfromname : "?");
+  }
 }

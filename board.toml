@@ -147,7 +147,7 @@ panic_screen = true
 kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "sheng-pmgr=2", "sheng-smp=1", "armcpu-spi-ipi=1",
                "armcpu-self-ipi=1", "native-ufs-root=1", "fuxi-display=1",
                "fuxi-display-base=0xb8000000", "fuxi-display-size=0x2b00000",
-               "fuxi-root-check=1"]
+               "fuxi-root-check=2"]
 # The trust cache the payload carries as kernel.macho.trustcache. DarwinBoot's ValidTrustCaches
 # (drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c) reads a container of version 2 modules, and the IPSW's
 # RestoreTrustCache is a version 1 module (uuid cfc8a0d56fb24d6c8b9bd3976ce18057, 267 entries of 22 bytes), so
