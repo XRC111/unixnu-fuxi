@@ -48,9 +48,17 @@ def load_packer():
 
 
 def run(*command, ok_codes=(0,)):
+    # Echo the command first: when a build fails on the runner the log is the only evidence, and the
+    # previous failure reported only "hdiutil failed" without saying which invocation.
+    print('+', ' '.join(str(x) for x in command), flush=True)
     result = subprocess.run([str(x) for x in command], capture_output=True, text=True)
     if result.returncode not in ok_codes:
-        raise SystemExit(f'{command[0]} failed ({result.returncode}):\n{result.stdout}{result.stderr}')
+        raise SystemExit(f'{command[0]} failed ({result.returncode}):\n'
+                         f'  command: {" ".join(str(x) for x in command)}\n'
+                         f'  stdout: {result.stdout.strip()}\n'
+                         f'  stderr: {result.stderr.strip()}')
+    if result.stdout.strip():
+        print(result.stdout.strip(), flush=True)
     return result.stdout
 
 
@@ -58,22 +66,30 @@ def make_with_hdiutil(raw: Path, size: int) -> str:
     """Format a fresh APFS container and read its bytes back. Returns how it was made."""
     if not shutil.which('hdiutil'):
         raise SystemExit('hdiutil not found; this is the macOS path, or pass --mkapfs on Linux')
-    sparse = raw.with_suffix('.sparseimage')
-    # -fs APFS makes the container and one volume, and -volname names that volume. A SPARSE image starts
-    # near empty on disk, which matters because the Data allocation is many GiB of skeleton.
-    run('hdiutil', 'create', '-size', f'{size // MIB}m', '-fs', 'APFS', '-volname', LABEL,
-        '-type', 'SPARSE', str(sparse))
-    # Read the bytes through the block device the image exposes. Converting to UDRO and cutting the file
-    # would not work: a UDRO file is a UDIF wrapper with a trailer, not the container itself.
-    attached = run('hdiutil', 'attach', '-nomount', '-nobrowse', '-noverify',
-                   '-imagekey', 'diskimage-class=CRawDiskImage', str(sparse))
-    match = re.match(r'(/dev/disk\d+)', attached)
-    if not match:
-        raise SystemExit(f'hdiutil attach did not name a device: {attached!r}')
-    device = match.group(1)
+
+    # Step 1: an empty read/write UDIF image, no filesystem yet. Creating it with -fs in the same breath is
+    # what the first attempt did, and the resulting image would not attach afterwards.
+    image = raw.with_suffix('.dmg')
+    run('hdiutil', 'create', '-size', f'{size // MIB}m', '-type', 'UDIF', '-format', 'UDRW',
+        '-layout', 'NONE', '-ov', str(image))
+
+    # Step 2: attach it, write the APFS container onto it, detach. newfs_apfs is hdiutil's own formatter and
+    # produces exactly what the kernel and mount_apfs expect.
+    attached = run('hdiutil', 'attach', '-nomount', '-nobrowse', '-noverify', str(image))
+    device = None
+    for line in attached.split('\n'):
+        match = re.match(r'(/dev/disk\d+)', line.strip())
+        if match:
+            device = match.group(1)
+            break
+    if not device:
+        raise SystemExit(f'hdiutil attach did not name a device:\n{attached}')
+
     try:
-        # /dev/r<name> is the raw character device: no buffer alignment games, and the size is the
-        # container, so a plain dd of the whole device yields exactly `size` bytes.
+        # Format the whole device. APFS is case-insensitive by default, which is what a Data volume is.
+        run('newfs_apfs', '-v', LABEL, device)
+        # Read the bytes back through the raw character device. The size is the whole container, so a dd of
+        # the device yields exactly `size` bytes; a timing out dd is a real failure, not a partial success.
         source = '/dev/r' + device.split('/')[-1]
         result = subprocess.run(
             ['dd', f'if={source}', f'of={raw}', f'bs={MIB}', f'count={size // MIB}'],
@@ -82,6 +98,7 @@ def make_with_hdiutil(raw: Path, size: int) -> str:
             raise SystemExit(f'dd from {source} failed ({result.returncode}):\n{result.stderr}')
     finally:
         subprocess.run(['hdiutil', 'detach', device, '-force'], capture_output=True)
+
     if raw.stat().st_size != size:
         raise SystemExit(f'the raw copy is {raw.stat().st_size} bytes, not the {size} requested')
     return 'hdiutil'

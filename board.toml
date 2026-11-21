@@ -119,6 +119,9 @@ volume = "FUXIESP"
 size_mib = 192
 loader = "firmware"
 title = "UniXNU"
+# The Setup-skipping seed tool: without the preferences this writes, a fresh Data seed
+# boots into Setup instead of SpringBoard.
+skip_setup_tool = "scripts/seed-data-skip-setup.py"
 panic_screen = true
 # -v, serial=3, debug=0x14e and kt_fixed_zones=120 as on UniXNU-sheng and the other SM8550 ports. sheng-pmgr=2 publishes
 # the original ApplePMGRNub that AMFI waits for (kits/fuxi/ShengPlatformPower.cpp, as UniXNU-sheng); without it AMFI panics

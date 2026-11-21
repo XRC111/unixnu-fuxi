@@ -279,8 +279,12 @@ jobs:
       - name: Build payload
         working-directory: unixnu
         run: |
+          # --skip-setup applies board.toml [payload] skip_setup_tool to the Data seed: it writes the
+          # purplebuddy and springboard preferences that skip Setup, and the /private/var/containers
+          # directories the data volume carries. Without it a fresh seed boots into Setup.
           ./unixnu build payload --device "$GITHUB_WORKSPACE/fuxi" --uefi "$GITHUB_WORKSPACE/uefi-fuxi" \
-            --unique-chip-id "$BRINGUP_SEED" --trust-cache "$UNIXNU_TRUST_CACHE" --data-ramdisk "$UNIXNU_DATA_RAMDISK"
+            --unique-chip-id "$BRINGUP_SEED" --trust-cache "$UNIXNU_TRUST_CACHE" \
+            --data-ramdisk "$UNIXNU_DATA_RAMDISK" --skip-setup
           cat "$(find out -path '*/payload/payload.json' | head -n 1)"
       - name: Build firmware
         working-directory: unixnu
