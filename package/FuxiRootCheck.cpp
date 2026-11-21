@@ -22,6 +22,11 @@
 #include <sys/namei.h>
 #include <sys/vfs_context.h>
 
+// rootvnode is the mounted root vnode; bsd_init sets it before this probe runs. Its declaration is not
+// exported by the headers this file includes, so name it here rather than reach into a private header.
+extern "C" {
+extern vnode_t rootvnode;
+}
 namespace {
 
 // The paths that decide whether launchd can start. Each is checked with namei, the same lookup the loader
